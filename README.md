@@ -1,4 +1,4 @@
-# rusty
+# rustyd
 
 ## Rust
 
@@ -62,4 +62,4 @@ world from source the resulting `libdtrace` does specify its dependencies.
 Change `arg` of `dtrace_progam_strcompile` to `* const * const` from
 `* mut * mut`.
 
-Remove `\* mut` from `dtracce_work` `arg3` and `arg4`.
+Remove `* mut` from `dtrace_work` `arg3` and `arg4`.
