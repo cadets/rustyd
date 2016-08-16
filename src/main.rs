@@ -1,22 +1,41 @@
 
+#![deny(unused_mut)]
+extern crate zookeeper;
 #[macro_use]
 extern crate log;
-extern crate fern;
+extern crate log4rs;
 extern crate time;
-extern crate libc;
 extern crate rustc_serialize;
 extern crate docopt;
+extern crate errno;
+extern crate libc;
+extern crate kafka;
+#[macro_use]
+extern crate chan;
+extern crate chan_signal;
+extern crate dtrace_rust;
 
-use kafka::consumer::{Consumer, FetchOffset};
-use kafka::error::Error as KafkaError;
-use libc::{c_char, c_int};
-use std::ffi::{CString, CStr};
-use std::process::exit;
-use std::default::Default;
+extern {
+   pub fn gethostname(name: *mut libc::c_char, size: libc::size_t)
+      -> libc::c_int;
+}
+
+use dtrace_rust::instrument::InstrumentationThreadMessage;
+use dtrace_rust::instrument::instrument_endpoint;
 use docopt::Docopt;
+use std::collections;
+use std::default::Default;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::error::Error;
+use std::time::Duration;
+use zookeeper::{CreateMode, Watcher, WatchedEvent, ZkState, ZooKeeper};
+use zookeeper::acls;
+use zookeeper::recipes::cache::{PathChildrenCache, PathChildrenCacheEvent};
+use chan_signal::Signal;
 
-mod libdtrace;
-
+// Docopts usage specification
 const USAGE: &'static str = "
 DTrace Rust consumer
 
@@ -24,264 +43,289 @@ Usage:
     ddtrace_rust [options]
 
 Options:
-    -h, --help    Displays this message    
-    -n SCRIPT     DLangauge script
+    -h, --help  Displays this message    
+    -b <brokers>  Kafka brokers
+    -o <topic>, --output-topic <topic>  Kafka output topic
+    -z <zookeeper_cluster>, --zookeeper <zookeeper_cluster>  Zookeeper cluster 
 ";
+
+// Host agent information
+const NAME: &'static str = env!("CARGO_PKG_NAME");
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+// ZooKeeper 
+const DDTRACE_PATH: &'static str = "/ddtrace";
+const DDTRACE_INSTRUMENTATION_PATH: &'static str = "/ddtrace/instrumentation";
+
+struct InstrumentedEndpoint {
+   zk: Arc<ZooKeeper>,
+   instrumentation: Mutex<collections::HashMap<String, Instrumentation>>,
+   kafka_brokers: Vec<String>,
+   kafka_output_topic: String,
+}
+
+impl InstrumentedEndpoint {
+   fn new(zk: Arc<ZooKeeper>, brokers: Vec<String>, output_topic: String)
+      -> InstrumentedEndpoint {
+      InstrumentedEndpoint {
+         zk: zk,
+         instrumentation: Mutex::new(collections::HashMap::new()),
+         kafka_brokers: brokers,
+         kafka_output_topic: output_topic,
+      }
+   }
+}
+
+struct Instrumentation {
+   tx: mpsc::Sender<InstrumentationThreadMessage>,
+   script: String,
+}
 
 #[derive(RustcDecodable)]
 struct Args {
-    flag_n: String,
+    flag_b: String,
+    flag_o: String,
+    flag_z: String,
 }
 
-fn dtrace_open(version: i32, flags: i32)
-    -> (*mut libdtrace::dtrace_hdl_t, i32) {
-
-    let mut err: libc::c_int = 0;    
-    let handle = unsafe {
-        libdtrace::dtrace_open(version, flags, &mut err)
-    };
-    (handle, err)
+struct LoggingWatcher;
+impl Watcher for LoggingWatcher {
+   fn handle(&self, event: WatchedEvent) {
+      info!("{:?}", event);
+   }
 }
 
-fn dtrace_setopt(handle: *mut libdtrace::dtrace_hdl_t,
-    opt: &'static str, val: &'static str) {
-
-    unsafe {
-        libdtrace::dtrace_setopt(handle,
-            CString::new(opt).unwrap().as_ptr(),
-            CString::new(val).unwrap().as_ptr());
-    }
+struct InstrumentationWatcher;
+impl Watcher for InstrumentationWatcher {
+   fn handle(&self, event: WatchedEvent) {
+      info!("here {:?}", event);
+   }
 }
 
-fn dtrace_errmsg(handle: *mut libdtrace::dtrace_hdl_t, err: i32) -> String {
+fn ddtrace_gethostname() -> Result<String, ()> {
+   let len = 255;
+   let mut buf = Vec::<u8>::with_capacity(len);
+   let ptr = buf.as_mut_slice().as_mut_ptr();
 
-    unsafe {
-        CStr::from_ptr(libdtrace::dtrace_errmsg(handle, err))
-             .to_string_lossy().into_owned()
-    }
+   let err = unsafe {
+      gethostname(ptr as *mut libc::c_char, len as libc::size_t)
+   } as i32;
+   match err {
+      0 => {
+         let mut real_len = len;
+         let mut i = 0;
+         loop {
+            let byte = unsafe { *(((ptr as u64) + (i as u64)) as *const u8) };
+            if byte == 0 {
+               real_len = i;
+               break;
+            }
+            i += 1;
+         }
+         unsafe { buf.set_len(real_len) }
+         Ok(String::from_utf8_lossy(buf.as_slice()).into_owned())
+      },
+      _ => {
+         Err(())
+      }
+   }
 }
 
-fn dtrace_program_strcompile(handle: *mut libdtrace::dtrace_hdl_t,
-    script: & str, spec: libdtrace::dtrace_probespec_t, cflags: u32)
-    -> *mut libdtrace::dtrace_prog_t {
-
-    let args = std::env::args().map(|arg| CString::new(arg).unwrap())
-        .collect::<Vec<CString>>();
-    let c_args = args.iter().map(|arg| arg.as_ptr())
-        .collect::<Vec<*const c_char>>();
-    unsafe {
-        libdtrace::dtrace_program_strcompile(handle,
-            CString::new(script).unwrap().as_ptr(), spec,
-            cflags, c_args.len() as c_int, c_args.as_ptr())
-    }
+// TODO: IS this needed?
+/*
+fn run(_sdone: chan::Sender<()>) {
+   loop {
+      trace!("waiting...");
+      thread::sleep(Duration::from_secs(5));
+   }
 }
-    
-fn dtrace_program_exec(handle: *mut libdtrace::dtrace_hdl_t,
-    prog: *mut libdtrace::dtrace_prog_t,
-    info: *mut libdtrace::dtrace_proginfo_t) -> i32 {
+*/
 
-    unsafe {
-        libdtrace::dtrace_program_exec(handle, prog, info)
-    }
-}
+fn zk_connected(endpoint: Arc<InstrumentedEndpoint>) {
+   info!("ZKState = Connected");                 
+   thread::spawn(move || { 
+      // Check that the endpoint is present in ZooKeeper
+      match endpoint.zk.clone().exists_w(
+         DDTRACE_INSTRUMENTATION_PATH, LoggingWatcher) {
+         Ok(_stat) => {
+            info!("{} path registered in ZooKeeper",
+               DDTRACE_INSTRUMENTATION_PATH);
+            register_endpoint(endpoint);
+         },
+         Err(e) => {
+            error!("failed ZooKeeper: {:?}", e);
+         }
+      }
+   });
+} 
 
-fn dtrace_go(handle: *mut libdtrace::dtrace_hdl_t) -> i32 {
-    unsafe {
-        libdtrace::dtrace_go(handle)
-    }
-}
+fn register_endpoint(endpoint: Arc<InstrumentedEndpoint>) {
 
-fn dtrace_work(handle: *mut libdtrace::dtrace_hdl_t,
-    fp: *mut libdtrace::__sFILE, pfunc: libdtrace::dtrace_consume_probe_f,
-    rfunc: libdtrace::dtrace_consume_rec_f, arg: *mut std::os::raw::c_void)
-    -> libdtrace::dtrace_workstatus_t{
-    unsafe {
-        //libdtrace::dtrace_work(handle, fp, pfunc, rfunc, arg)
-        libdtrace::dtrace_work(handle, libdtrace::__stdoutp, pfunc, rfunc, arg)
-    }
-}
+   // Register endpoint in ZooKeeper
+   // (The endpoint is registered as an ephemeral node, thus it serves
+   // as an indication that the endpoint is alive and available to
+   // instrument)
+   let hostname = ddtrace_gethostname().unwrap();
 
-fn dtrace_sleep(handle: *mut libdtrace::dtrace_hdl_t) {
-    unsafe {
-        libdtrace::dtrace_sleep(handle)
-    }
-}
-
-fn dtrace_stop(handle: *mut libdtrace::dtrace_hdl_t) -> i32 {
-    unsafe {
-        libdtrace::dtrace_stop(handle)
-    }
-}
-
-fn dtrace_close(handle: *mut libdtrace::dtrace_hdl_t) {
-    unsafe {
-        libdtrace::dtrace_close(handle)
-    }
+   let hostname_path = format!("{}/{}", DDTRACE_PATH, hostname);
+   let hostname_path_data = format!("{name} ({version})",
+      name = NAME, version = VERSION).to_string().into_bytes();
+                 
+   match endpoint.zk.clone().create(
+      hostname_path.as_ref(),
+      hostname_path_data,                  
+      acls::OPEN_ACL_UNSAFE.clone(),
+      CreateMode::Ephemeral) {
+      Ok(_) => {
+         info!("registered {} with ZooKeeper", hostname);
+         process_instrumentation(endpoint);
+      },
+      Err(e) => {
+      }
+   }
 }
 
-fn dtrace_errno(handle: *mut libdtrace::dtrace_hdl_t) -> i32 {
-    unsafe {
-        libdtrace::dtrace_errno(handle)
-    }
-}
+fn process_instrumentation(endpoint: Arc<InstrumentedEndpoint>) {
 
-fn dtrace_handle_buffered(handle: *mut libdtrace::dtrace_hdl_t,
-    hdlr: libdtrace::dtrace_handle_buffered_f,
-    arg: *mut ::std::os::raw::c_void) -> i32 {
-    unsafe {
-        libdtrace::dtrace_handle_buffered(handle, hdlr, arg)
+   let mut pcc = PathChildrenCache::new(endpoint.zk.clone(),
+      DDTRACE_INSTRUMENTATION_PATH).unwrap();
+   match pcc.start() {
+      Err(err) => {
+         error!("failed starting cache: {:?}", err);
+         return;
+      }
+      _ => {
+         info!("cache started");
+      }
+   }
+
+   let (ev_tx, ev_rx) = mpsc::channel();
+   pcc.add_listener(move |e| {
+      match ev_tx.send(e) {
+         Err(e) => { error!("{}", e); },
+         _ => {}
+      }
+   });
+
+   for ev in ev_rx {
+      info!("received event {:?}", ev);
+      match ev {
+         PathChildrenCacheEvent::ChildAdded(
+            script, script_data) => {
+            let script_str =
+               String::from_utf8_lossy(&script_data[..]).into_owned();
+            let script_str_copy = script_str.clone();
+
+            // Start a new thread for the requested
+            // instrumentation 
+            let (tx, rx): (mpsc::Sender<InstrumentationThreadMessage>, mpsc::Receiver<InstrumentationThreadMessage>) = mpsc::channel();
+            let _child = thread::spawn(move || {
+               instrument_endpoint(script_str, rx);
+             }); 
+
+             // Update the instrumentation managed
+             // by the endpoint
+             let instrumentation =
+                Instrumentation{tx: tx, script: script_str_copy};
+             endpoint.instrumentation.lock().unwrap()
+                .insert(script, instrumentation);
+          },
+          PathChildrenCacheEvent::ChildUpdated(
+             _script, _script_data) => {
+          // TODO - do I want to support this
+          },
+          PathChildrenCacheEvent::ChildRemoved(script) => {
+             // Stop instrumentation for the given script
+             match endpoint.instrumentation.lock().unwrap().get(&script) {
+                Some(value) => {
+                   value.tx.send(InstrumentationThreadMessage::Stop).unwrap();
+                   endpoint.instrumentation.lock().unwrap().remove(&script);
+                   info!("stopped {}", script);
+                },
+                None => {
+                   error!("{} not found", script);
+                }
+             }
+          },
+          _ => { }
+       }
     }
 }
 
 fn main() {
+   // Notify on SIGNINT and SIGTERM
+   // (Note this must be done before and threads are spawned)
+   let signal = chan_signal::notify(&[Signal::INT, Signal::TERM]);
+   //let (sdone, rdone) = chan::sync(0);
+   //thread::spawn(move || run(sdone));
 
-    // Initialise the global logger
-    let logger_config = fern::DispatchConfig {
-       format: Box::new(|msg: &str, level: &log::LogLevel,
-       _location: &log::LogLocation| {
-       format!("[{}][{}] {}",
-       time::now().strftime("%Y-%m-%d][%H:%M:%S").unwrap(), level, msg)
-       }),
-       output: vec![fern::OutputConfig::stdout(),
-       fern::OutputConfig::file("output.log")],
-       level: log::LogLevelFilter::Trace,
-    };
+   // Initialise the global logger
+   log4rs::init_file("log.toml", Default::default()).unwrap();
+ 
+   info!("initializing...");
 
-    if let Err(e) = fern::init_global_logger(logger_config,
-        log::LogLevelFilter::Trace) {
-        panic!("Failed to initialize global logger: {}", e);
-    }
-    
-    info!("dtrace initializing...");
+   // Parse the command line arguments
+   let args: Args = Docopt::new(USAGE)
+      .and_then(|d| d.decode())
+      .unwrap_or_else(|e| e.exit());
 
-    // Parse the command line arguments
-/*
-    let args: Args = Docopt::new(USAGE)
-        .and_then(|d| d.decode())
-        .unwrap_or_else(|e| e.exit());
-*/
-    
-    let dtrace_version = 3;
-    let flags = 0;
-    let (handle, err) = dtrace_open(dtrace_version, flags);
-    if err != 0 {
-        error!("dtrace error {} initializing", dtrace_errmsg(handle, err));
-        exit(1);
-    }
-    info!("dtrace initialized");
-    
-    //dtrace_setopt(handle, "oformat", "json");
-    dtrace_setopt(handle, "bufsize", "4m");
-    dtrace_setopt(handle, "aggsize", "4m");
-    dtrace_setopt(handle, "temporal", "4m");
-    info!("dtrace options set");
+   // Construct the instrumented endpoint
+   // TODO: The Kafka conf should also be in ZooKeeper
+   // (data on the instrumentation znode?)
+   let brokers = args.flag_b.split(",").map(|x| x.to_owned())
+      .collect::<Vec<String>>();
+   let output_topic = args.flag_o;
 
-    let prog = dtrace_program_strcompile(handle, "BEGIN {print(\"Hello\");}",
-        libdtrace::dtrace_probespec::DTRACE_PROBESPEC_NAME, 0x0080);
-    if prog.is_null() {
-        error!("failed to compile dtrace program {}",
-           dtrace_errmsg(handle, dtrace_errno(handle)));
-        exit(1);
-    }
-    info!("dtrace program compiled");
-/*
-    if dtrace_handle_buffered(handle, buffered_handler,
-        std::ptr::null_mut()) == -1 {
-        error!("failed to register dtrace buffered handler");
-        exit(1);
-    }
-*/
-    let mut info: libdtrace::dtrace_proginfo_t = Default::default();
-    let status = dtrace_program_exec(handle, prog, &mut info);
-    if status == -1 {
-        error!("failed to eanble dtrace probes {}",
-           dtrace_errmsg(handle, dtrace_errno(handle)));
-        exit(1);
-    }
-    info!("dtrace probes enables");
+   // Create a connection to ZooKeeper
+   info!("connecting to ZooKeeper {}", args.flag_z);
+   match ZooKeeper::connect(&*args.flag_z, Duration::from_secs(5),
+      LoggingWatcher) {
+      Ok(zk) => {
+         let endpoint_arc = Arc::new(
+            InstrumentedEndpoint::new(Arc::new(zk), brokers, output_topic));
 
-    if dtrace_go(handle) != 0 {
-       error!("could not start dtrace instrumentation {}",
-           dtrace_errmsg(handle, dtrace_errno(handle)));
-       exit(1);
-    }
-    info!("dtrace instrumentation started...");
+         // Register for changes in the ZooKeeper state
+         let zk_cleanup = endpoint_arc.zk.clone();
+         let zk_listen_subscription =
+            endpoint_arc.zk.clone().add_listener(move |state: ZkState| {
+            match state {
+               ZkState::Connected => {
 
-    let mut done = 0;
-    while {
-        if done == 0 {
-           dtrace_sleep(handle);
-        }
-
-        info!("dtrace work...");
-        match dtrace_work(handle, std::ptr::null_mut(), chew, chewrec,
-            std::ptr::null_mut()) {
-            libdtrace::dtrace_workstatus_t::DTRACE_WORKSTATUS_ERROR => {
-                if dtrace_errno(handle) != 9959 {
-                    error!("{}", dtrace_errmsg(handle, dtrace_errno(handle)));
-                    done = 1;
-                }
+                  let endpoint = endpoint_arc.clone();
+                  zk_connected(endpoint);
+               },
+               _ => { info!("ZKState = {:?}", state) }
             }
-	    libdtrace::dtrace_workstatus_t::DTRACE_WORKSTATUS_OKAY => {
-                done = 0;
+         });
+
+         loop {
+            chan_select! {
+               // Await notified signals (SIGINT and SIGTERM)
+               signal.recv() -> signal => {
+                  info!("received signal SIG{:?}", signal.unwrap());
+                  break;
+               },
             }
-            libdtrace::dtrace_workstatus_t::DTRACE_WORKSTATUS_DONE => {
-                done = 1;
+         }
+                 
+         // Remove ZooKeeper state listener
+         info!("removing ZooKepper state listener");
+         zk_cleanup.remove_listener(zk_listen_subscription);
+
+         // Close ZooKeeper handle
+         info!("closing ZooKepper connection");
+         match zk_cleanup.close() {
+            Ok(_) => { },
+            Err(e) => {
+                error!("failed closing ZooKeeper connection: {:?}", e);
             }
-        }
-        done == 0
-    } {}
+         }
 
-    info!("dtrace stopping");
-    dtrace_stop(handle);
-
-    info!("dtrace closing");
-    dtrace_close(handle);
-}
-
-unsafe extern fn buffered_handler(bufdata : *const libdtrace::dtrace_bufdata_t,
-    arg: *mut ::std::os::raw::c_void) -> i32 {
-
-    info!("buffered_handler");
-    0
-}
-
-unsafe extern fn chew(data: *const libdtrace::dtrace_probedata_t,
-    arg: *mut std::os::raw::c_void) -> i32 {
-    
-    info!("chew");
-    let pd: *mut libdtrace::dtrace_probedesc_t = (* data).dtpda_pdesc;
-    trace!("id = {}", (* pd).dtpd_id);
-    trace!("func = {:?}", CStr::from_ptr((* pd).dtpd_func.as_ptr()));
-    trace!("name = {:?}", CStr::from_ptr((* pd).dtpd_name.as_ptr()));
-
-    // Consume this record - DTRACE_CONSUME_THIS
-    0
-}
-
-unsafe extern fn chewrec(data: *const libdtrace::dtrace_probedata_t,
-    rec: *const libdtrace::dtrace_recdesc_t, arg: *mut std::os::raw::c_void)
-    -> i32 {
-
-    info!("chewrec");
-
-    //if rec == std::ptr::null_mut() {
-    if rec.is_null() {
-        // Consume next record - DTRACE_CONSUME_NEXT
-        trace!("consume next");
-        1
-    } else {
-        let action = (* rec).dtrd_action;
-	trace!("action = {}", action);
-        if action  == 2 { 
-            // Consume next record - DTRACE_CONSUME_NEXT
-            trace!("consume next");
-            1
-        } else {
-            // Consume this record - DTRACE_CONSUME_THIS
-            trace!("consume this");
-            0
-        }
-    }
+         info!("cleanup finished");
+      },
+      Err(e) => {
+         error!("could not connect to ZooKeeper {}: {:?}", args.flag_z, e);
+      }
+   }
 }
 

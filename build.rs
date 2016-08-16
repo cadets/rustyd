@@ -8,4 +8,5 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=z");
     println!("cargo:rustc-link-lib=dylib=pthread");
     println!("cargo:rustc-link-lib=dylib=util");
+    println!("cargo:rustc-link-lib=dylib=xo");
 }

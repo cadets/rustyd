@@ -1,0 +1,26 @@
+refresh_rate = "5 seconds"
+
+[appenders.console]
+kind = "console"
+
+[appenders.console.encoder]
+pattern = "{d(%+)(local)} [{t}] {h({l})} {M}:{m}{n}"
+
+[[appenders.console.filter]]
+kind = "threshold"
+level = "error"
+
+[appenders.file]
+kind = "file"
+path = "output.log"
+pattern = "{d} [{t}] {l} {M}:{m}{n}"
+
+[root]
+level = "warn"
+appenders = ["console"]
+
+[loggers."dtrace_rust"]
+level = "info"
+appenders = ["file"]
+additive = true
+
