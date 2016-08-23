@@ -131,16 +131,6 @@ fn ddtrace_gethostname() -> Result<String, ()> {
    }
 }
 
-// TODO: IS this needed?
-/*
-fn run(_sdone: chan::Sender<()>) {
-   loop {
-      trace!("waiting...");
-      thread::sleep(Duration::from_secs(5));
-   }
-}
-*/
-
 fn zk_connected(endpoint: Arc<InstrumentedEndpoint>) {
    info!("ZKState = Connected");                 
    thread::spawn(move || { 
@@ -256,8 +246,6 @@ fn main() {
    // Notify on SIGNINT and SIGTERM
    // (Note this must be done before and threads are spawned)
    let signal = chan_signal::notify(&[Signal::INT, Signal::TERM]);
-   //let (sdone, rdone) = chan::sync(0);
-   //thread::spawn(move || run(sdone));
 
    // Initialise the global logger
    log4rs::init_file("config/log.toml", Default::default()).unwrap();
