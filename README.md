@@ -56,7 +56,7 @@ the root cause of this.)
 
 `cargo build` passes the command line argument `-Wl,-as-needed` to the linker,
 However when installing FreeBSD from an ISO libstrace doesn't included it's
-dependencies on other shraed objects in `NEEDED` sections. WHen rebuilding
+dependencies on other shraed objects in `NEEDED` sections. When rebuilding
 world from source the resulting `libdtrace` does specify its dependencies.
 
 Change `arg` of `dtrace_progam_strcompile` to `* const * const` from

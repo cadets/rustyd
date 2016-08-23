@@ -30,14 +30,14 @@
  *
  */
 
-extern crate log;
-extern crate log4rs;
-extern crate time;
-extern crate libc;
-extern crate rustc_serialize;
-extern crate docopt;
-extern crate errno;
-extern crate kafka;
+//extern crate log;
+//extern crate log4rs;
+//extern crate time;
+//extern crate libc;
+//extern crate rustc_serialize;
+//extern crate docopt;
+//extern crate errno;
+//extern crate kafka;
 
 use kafka::producer::{Producer, Record};
 use std::ffi::{CString, CStr};

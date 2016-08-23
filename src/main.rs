@@ -318,11 +318,11 @@ fn main() {
          }
                  
          // Remove ZooKeeper state listener
-         info!("removing ZooKepper state listener");
+         info!("removing ZooKeeper state listener");
          zk_cleanup.remove_listener(zk_listen_subscription);
 
          // Close ZooKeeper handle
-         info!("closing ZooKepper connection");
+         info!("closing ZooKeeper connection");
          match zk_cleanup.close() {
             Ok(_) => { },
             Err(e) => {
