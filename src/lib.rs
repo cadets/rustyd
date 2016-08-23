@@ -28,7 +28,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * [id for your version control system, if any]
  */
 
 #[macro_use]
