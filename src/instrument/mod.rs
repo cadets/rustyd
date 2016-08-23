@@ -311,7 +311,7 @@ unsafe extern fn buffered_handler(
     return 0;
 }
 
-unsafe extern fn ddtrace_xo_write(arg1: *mut ::std::os::raw::c_void,
+unsafe extern fn ddtrace_xo_write(_arg1: *mut ::std::os::raw::c_void,
     buf: *const ::std::os::raw::c_char) -> ::std::os::raw::c_int {
    
     info!("ddtrace_xo_write");
@@ -362,7 +362,7 @@ unsafe extern fn chew(data: *const self::libdtrace::dtrace_probedata_t,
     return DTRACE_CONSUME_THIS;
 }
 
-unsafe extern fn chewrec(data: *const self::libdtrace::dtrace_probedata_t,
+unsafe extern fn chewrec(_data: *const self::libdtrace::dtrace_probedata_t,
     rec: *const self::libdtrace::dtrace_recdesc_t,
     arg: *mut ::std::os::raw::c_void) -> i32 {
 

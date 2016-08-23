@@ -56,10 +56,8 @@ use dtrace_rust::instrument::instrument_endpoint;
 use docopt::Docopt;
 use std::collections;
 use std::default::Default;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::error::Error;
 use std::time::Duration;
 use zookeeper::{CreateMode, Watcher, WatchedEvent, ZkState, ZooKeeper};
 use zookeeper::acls;
@@ -75,7 +73,6 @@ Usage:
 
 Options:
     -h, --help  Displays this message    
-    -b <brokers>  Kafka brokers
     -o <topic>, --output-topic <topic>  Kafka output topic
     -z <zookeeper_cluster>, --zookeeper <zookeeper_cluster>  Zookeeper cluster 
 ";
@@ -123,13 +120,6 @@ struct LoggingWatcher;
 impl Watcher for LoggingWatcher {
    fn handle(&self, event: WatchedEvent) {
       info!("{:?}", event);
-   }
-}
-
-struct InstrumentationWatcher;
-impl Watcher for InstrumentationWatcher {
-   fn handle(&self, event: WatchedEvent) {
-      info!("here {:?}", event);
    }
 }
 
@@ -202,6 +192,7 @@ fn register_endpoint(endpoint: Arc<InstrumentedEndpoint>) {
          process_instrumentation(endpoint);
       },
       Err(e) => {
+         error!("failed registering endpoint with ZooKeeper {:?}", e);
       }
    }
 }
@@ -290,7 +281,6 @@ fn main() {
 
    // Construct the instrumented endpoint
    // TODO: The Kafka conf should also be in ZooKeeper
-   // (data on the instrumentation znode?)
    let brokers = args.flag_b.split(",").map(|x| x.to_owned())
       .collect::<Vec<String>>();
    let output_topic = args.flag_o;
