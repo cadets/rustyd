@@ -260,7 +260,7 @@ fn main() {
    //thread::spawn(move || run(sdone));
 
    // Initialise the global logger
-   log4rs::init_file("log.toml", Default::default()).unwrap();
+   log4rs::init_file("config/log.toml", Default::default()).unwrap();
  
    info!("initializing...");
 
