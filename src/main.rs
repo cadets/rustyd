@@ -73,6 +73,7 @@ Usage:
 
 Options:
     -h, --help  Displays this message    
+    -b <kafka_cluster>, --broker <kafka_cluster>  Kafka cluster 
     -o <topic>, --output-topic <topic>  Kafka output topic
     -z <zookeeper_cluster>, --zookeeper <zookeeper_cluster>  Zookeeper cluster 
 ";
