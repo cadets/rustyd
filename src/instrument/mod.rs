@@ -33,11 +33,12 @@
 //extern crate log;
 //extern crate log4rs;
 //extern crate time;
-//extern crate libc;
+extern crate libc;
 //extern crate rustc_serialize;
 //extern crate docopt;
 //extern crate errno;
 //extern crate kafka;
+extern crate libloading;
 
 use kafka::producer::{Producer, Record};
 use std::ffi::{CString, CStr};
@@ -289,7 +290,18 @@ pub fn instrument_endpoint(script: String,
 unsafe extern fn buffered_handler(
    bufdata : *const self::libdtrace::dtrace_bufdata_t,
    _arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
-
+        
+   match libloading::Library::new("/usr/home/graeme/ddtrace_kafka/target/debug/libddtrace_kafka.so") {
+      Ok(lib) => {
+         unsafe {
+            let func: libloading::Symbol<unsafe extern fn(&[u8]) -> i32> =
+               try!(lib.get(b"my_write"));
+            func(CStr::from_ptr((* bufdata).dtbda_buffered).to_bytes())
+         }
+      },
+      Err(_e) => { -1 }
+   }
+/*
    let mut producer =
         match Producer::from_hosts(vec!["172.16.100.163:9092".to_owned()])
            .with_ack_timeout(1000)
@@ -309,6 +321,7 @@ unsafe extern fn buffered_handler(
        }; 
 
     return 0;
+*/
 }
 
 unsafe extern fn ddtrace_xo_write(_arg1: *mut ::std::os::raw::c_void,
