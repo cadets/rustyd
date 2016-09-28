@@ -1,0 +1,2 @@
+cargo:rustc-link-lib=dylib=snappy
+cargo:rustc-link-search=native=/usr/local/lib

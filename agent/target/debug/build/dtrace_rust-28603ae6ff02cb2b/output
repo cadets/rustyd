@@ -1,0 +1,11 @@
+cargo:rustc-link-search=native=/usr/local/lib
+cargo:rustc-link-lib=dylib=dtrace
+cargo:rustc-link-lib=dylib=proc
+cargo:rustc-link-lib=dylib=rtld_db
+cargo:rustc-link-lib=dylib=ctf
+cargo:rustc-link-lib=dylib=elf
+cargo:rustc-link-lib=dylib=c
+cargo:rustc-link-lib=dylib=z
+cargo:rustc-link-lib=dylib=pthread
+cargo:rustc-link-lib=dylib=util
+cargo:rustc-link-lib=dylib=xo

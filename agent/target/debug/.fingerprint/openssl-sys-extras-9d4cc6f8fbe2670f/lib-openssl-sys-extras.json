@@ -1,0 +1,1 @@
+{"rustc":15065773949427633163,"target":1149326694893100608,"profile":13023446655302672390,"local":{"variant":"Precalculated","fields":["0.7.14"]},"features":"None","deps":[["libc v0.2.13",13647436138435608620],["openssl-sys v0.7.14",14701182455123275433]],"rustflags":[]}

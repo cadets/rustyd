@@ -1,0 +1,12 @@
+[package]
+name = "ddtrace_kafka"
+version = "0.1.0"
+authors = ["Graeme Jenkinson <gcj21@cl.cam.ac.uk>"]
+
+[dependencies]
+kafka = "0.3.2"
+log = "0.3.6"
+
+[lib]
+name = "ddtrace_kafka"
+crate-type=["dylib"]
