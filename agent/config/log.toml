@@ -20,7 +20,7 @@ level = "warn"
 appenders = ["console"]
 
 [loggers."dtrace_rust"]
-level = "info"
+level = "trace"
 appenders = ["file"]
 additive = true
 

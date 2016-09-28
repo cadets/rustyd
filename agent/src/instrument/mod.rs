@@ -207,7 +207,7 @@ pub fn instrument_endpoint(script: String,
     }
     info!("dtrace initialized");
     
-    dtrace_setopt(handle, "oformat", "json");
+//    dtrace_setopt(handle, "oformat", "json");
     dtrace_setopt(handle, "bufsize", "4m");
     dtrace_setopt(handle, "aggsize", "4m");
     dtrace_setopt(handle, "temporal", "4m");;
@@ -291,8 +291,10 @@ pub fn instrument_endpoint(script: String,
 unsafe extern fn buffered_handler(
    bufdata : *const self::libdtrace::dtrace_bufdata_t,
    _arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
-        
-   match libloading::Library::new("/usr/home/graeme/ddtrace_kafka/target/debug/libddtrace_kafka.so") {
+       
+   info!("buffered_handler {:?}", CStr::from_ptr((* bufdata).dtbda_buffered));
+ 
+   match libloading::Library::new("../transport/tcp/target/debug/libddtrace_tcp.so") {
       Ok(lib) => {
          if let Ok(func) =lib.get::<libloading::Symbol<unsafe extern fn(&[u8]) -> i32>>(b"my_write") {
             func(CStr::from_ptr((* bufdata).dtbda_buffered).to_bytes())
@@ -306,9 +308,10 @@ unsafe extern fn ddtrace_xo_write(_arg1: *mut ::std::os::raw::c_void,
     buf: *const ::std::os::raw::c_char) -> ::std::os::raw::c_int {
    
     info!("ddtrace_xo_write");
-    
+ 
+/*    
     let mut producer =
-        match Producer::from_hosts(vec!["172.16.100.163:9092".to_owned()])
+        match Producer::from_hosts(vec!["172.16.100.165:9092".to_owned()])
            .with_ack_timeout(1000)
            .with_required_acks(1)
            .create() {
@@ -324,7 +327,7 @@ unsafe extern fn ddtrace_xo_write(_arg1: *mut ::std::os::raw::c_void,
            Ok(_) => {},
            Err(e) => {error!("sending to Kafka {}", e); return -1;},
        }; 
-
+*/
     return 0;
 }
 
@@ -363,7 +366,7 @@ unsafe extern fn chewrec(_data: *const self::libdtrace::dtrace_probedata_t,
         // Consume next record - DTRACE_CONSUME_NEXT
         trace!("consume next");
         let handle = arg as *mut self::libdtrace::dtrace_hdl_t;
-        xo_finish_h((* handle).dt_xo_hdl as *mut libxo::xo_handle_s);
+	xo_finish_h((* handle).dt_xo_hdl as *mut libxo::xo_handle_s);
         xo_destroy((* handle).dt_xo_hdl as *mut libxo::xo_handle_s);
         return DTRACE_CONSUME_NEXT;
     } else {

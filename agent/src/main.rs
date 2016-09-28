@@ -45,7 +45,6 @@ extern crate kafka;
 extern crate chan;
 extern crate chan_signal;
 extern crate dtrace_rust;
-extern crate libloading;
 
 extern {
    pub fn gethostname(name: *mut libc::c_char, size: libc::size_t)
@@ -122,15 +121,6 @@ struct LoggingWatcher;
 impl Watcher for LoggingWatcher {
    fn handle(&self, event: WatchedEvent) {
       info!("{:?}", event);
-   }
-}
-
-fn call_dynamic() -> libloading::Result<i32> {
-   let lib = try!(libloading::Library::new("/usr/home/graeme/ddtrace_kafka/target/debug/libddtrace_kafka.so"));
-   unsafe {
-      let func: libloading::Symbol<unsafe extern fn() -> i32> =
-         try!(lib.get(b"my_api"));
-      Ok(func())
    }
 }
 
@@ -231,13 +221,13 @@ fn process_instrumentation(endpoint: Arc<InstrumentedEndpoint>) {
    });
 
    for ev in ev_rx {
-      info!("received event {:?}", ev);
       match ev {
          PathChildrenCacheEvent::ChildAdded(
             script, script_data) => {
             let script_str =
                String::from_utf8_lossy(&script_data[..]).into_owned();
             let script_str_copy = script_str.clone();
+            info!("received event {}", script_str_copy);
 
             // Start a new thread for the requested
             // instrumentation 
@@ -284,9 +274,6 @@ fn main() {
    log4rs::init_file("config/log.toml", Default::default()).unwrap();
  
    info!("initializing...");
-
-   // Test call_dynamic
-   info!("call_dynamic() {}", call_dynamic().unwrap());
 
    // Parse the command line arguments
    let args: Args = Docopt::new(USAGE)
