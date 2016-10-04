@@ -32,9 +32,18 @@
 
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate lazy_static;
 
 use std::io::prelude::*;
 use std::net::TcpStream;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+lazy_static! {
+    static ref HANDLE_MAP: Mutex<HashMap<i32, TcpStream>> =
+        Mutex::new(HashMap::new());
+}
 
 #[cfg(test)]
 mod tests {
@@ -54,16 +63,20 @@ pub fn my_fini() -> i32
 {
    0
 }
+
 #[no_mangle]
 pub fn my_open() -> i32
 {
-   100
+    let mut stream = TcpStream::connect("127.0.0.1:34254").unwrap();
+    HANDLE_MAP.lock().unwrap().insert(100, stream);
+    100
 }
 
 #[no_mangle]
 pub fn my_close() -> i32
 {
-   100
+    let mut _stream = HANDLE_MAP.lock().unwrap().remove(&100);
+    100
 }
 
 #[no_mangle]
@@ -75,12 +88,14 @@ pub fn my_read() -> i32
 #[no_mangle]
 pub fn my_write(data: &[u8]) -> i32
 {
-   // TOOD: improve error handling
-   let mut stream = TcpStream::connect("127.0.0.1:34254").unwrap();
-   match stream.write_all(data) {
-       Ok(_) => { 0 },
-       Err(err) => { -1 }
-   }
+    if let Some(mut stream)= HANDLE_MAP.lock().unwrap().get(&100) {
+        match stream.write_all(data) {
+            Ok(_) => { 0 },
+            Err(err) => { -1 }
+        }
+    } else {
+        -1
+    }
 }
 
 #[no_mangle]

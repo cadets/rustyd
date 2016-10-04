@@ -5,6 +5,7 @@ authors = ["Graeme Jenkinson <gcj21@cl.cam.ac.uk>"]
 
 [dependencies]
 log = "0.3.6"
+lazy_static = "0.2.1"
 
 [lib]
 name = "ddtrace_tcp"
