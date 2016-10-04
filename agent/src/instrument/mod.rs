@@ -343,6 +343,15 @@ unsafe extern fn chew(data: *const self::libdtrace::dtrace_probedata_t,
 
     let handle = arg as *mut self::libdtrace::dtrace_hdl_t;
     (* handle).dt_xo_hdl = xop as *mut self::libdtrace::xo_handle_s;
+ 
+   match libloading::Library::new("../transport/tcp/target/debug/libddtrace_tcp.so") {
+      Ok(lib) => {
+         if let Ok(func) =lib.get::<libloading::Symbol<unsafe extern fn() -> i32>>(b"my_open") {
+            func();
+         } else { return DTRACE_CONSUME_NEXT; }
+      },
+      Err(_e) => { return DTRACE_CONSUME_NEXT; }
+   }
 
     let pd: *mut self::libdtrace::dtrace_probedesc_t = (* data).dtpda_pdesc;
     //trace!("id = {}", (* pd).dtpd_id); timestamp
@@ -365,6 +374,15 @@ unsafe extern fn chewrec(_data: *const self::libdtrace::dtrace_probedata_t,
     if rec.is_null() {
         // Consume next record - DTRACE_CONSUME_NEXT
         trace!("consume next");
+ 
+   match libloading::Library::new("../transport/tcp/target/debug/libddtrace_tcp.so") {
+      Ok(lib) => {
+         if let Ok(func) =lib.get::<libloading::Symbol<unsafe extern fn() -> i32>>(b"my_close") {
+            func();
+         } else { return DTRACE_CONSUME_NEXT; }
+      },
+      Err(_e) => { return DTRACE_CONSUME_NEXT; }
+   }
         let handle = arg as *mut self::libdtrace::dtrace_hdl_t;
 	xo_finish_h((* handle).dt_xo_hdl as *mut libxo::xo_handle_s);
         xo_destroy((* handle).dt_xo_hdl as *mut libxo::xo_handle_s);
