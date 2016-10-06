@@ -1,0 +1,16 @@
+---
+- name: Install FreeBSD dependencies 
+  become: yes
+  pkgng: name={{ item }} state=present
+  with_items:
+    - "bash"
+    - "wget"
+    - "gmake"
+
+- name: set JAVA_HOME...
+  become: yes
+  lineinfile:
+    dest: /etc/login.conf
+    create: yes
+    line: "export JAVA_HOME=/usr/local/openjdk8"
+...

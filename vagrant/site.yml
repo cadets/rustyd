@@ -1,0 +1,73 @@
+---
+- name: python2
+  hosts: managed_endpoints
+  gather_facts: no
+  become: yes
+  pre_tasks:
+    - name: Install python
+      raw: pkg install -y python
+
+- hosts: commit_log 
+  roles:
+    - {role: weldpua2008.openjdk, openjdk_version: 8}
+    - jeqo.confluent-platform
+
+  tasks:
+    - name: Start Zookeeper
+      become: yes
+      command : "bin/zookeeper-server-start -daemon etc/kafka/zookeeper.properties chdir=/opt/confluent/confluent-{{confluent_release}}"
+
+    - name: Install zookeepercli 
+      become: yes
+      apt: deb=https://github.com/outbrain/zookeepercli/releases/download/v1.0.10/zookeepercli_1.0.10_amd64.deb
+
+    - name: Query DDTrace data in Zookeeper
+      command : "zookeepercli --servers localhost:2181 -c exists {{ item }}"
+      register: ddtrace_exists
+      with_items:
+      - "/ddtrace" 
+      - "/ddtrace/instrumentation"
+      ignore_errors: True
+      
+    - name: Write DDTrace data to Zookeeper
+      command : "zookeepercli --servers localhost:2181 -c create /ddtrace \"\""
+      when: "ddtrace_exists.results[0].rc != 0"
+
+    - name: Write DDTrace data to Zookeeper
+      command : "zookeepercli --servers localhost:2181 -c create /ddtrace/instrumentation \"\""
+      when: "ddtrace_exists.results[1].rc != 0"
+
+    - name: Query DDTrace managed endpoints in Zookeeper
+      command : "zookeepercli --servers localhost:2181 -c exists {{ '/ddtrace/instrumentation/' +item }}"
+      register: ddtrace_managed_endpoints_exists
+      with_inventory_hostnames: managed_endpoints
+      ignore_errors: True
+   
+    - name: Create DDTrace managed endpoints data to Zookeeper
+      command : "zookeepercli --servers localhost:2181 -c create {{ '/ddtrace/instrumentation/' + item.item }} \"\""
+      when: item.rc != 0
+      with_items:
+      - "{{ ddtrace_managed_endpoints_exists.results }}"
+
+    - name: Start Kafka
+      become: yes
+      command: "bin/kafka-server-start -daemon etc/kafka/server.properties chdir=/opt/confluent/confluent-{{confluent_release}}"
+
+    - name: Wait for Kafka server
+      wait_for: port=9092 host=localhost connect_timeout=10 timeout=30
+      ignore_errors: yes
+
+    - name: Create Kafka topics
+      command: "bin/kafka-topics --if-not-exists --create --zookeeper localhost:2181 --replication-factor 1 --partitions 1 --topic {{ item }} chdir=/opt/confluent/confluent-{{confluent_release}}"
+      with_items:
+      - "ddtrace-query-response"
+
+- hosts: managed_endpoints 
+  roles:
+    - host_agent
+
+- hosts: opus
+  roles:
+    - {role: weldpua2008.openjdk, openjdk_version: 8}
+    - opus_backend
+...

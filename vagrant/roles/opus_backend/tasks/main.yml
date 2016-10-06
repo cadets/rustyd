@@ -1,0 +1,25 @@
+---
+- include: FreeBSD.yml
+  when: ansible_distribution == 'FreeBSD'
+ 
+- name: Install git
+  apt: name=git state=present
+  become: yes
+
+- name: Install Python pip
+  become: yes
+  apt: name=python-pip state=present
+
+- name: Clone OPUS
+  git: repo=git@github.com:cadets/opus.git dest=opus update=yes accept_hostkey=yes version=cadets-rustyd
+
+
+- name: Build OPUS 
+  command: "{{ item }} chdir=opus"
+  with_items:
+    - ./build.sh
+  environment:
+    JAVA_HOME: /usr/local/openjdk8
+#  notify:
+#     Start OPUS
+...
