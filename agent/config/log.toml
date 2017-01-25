@@ -24,3 +24,8 @@ level = "trace"
 appenders = ["file"]
 additive = true
 
+[loggers."ddtrace_tcp"]
+level = "trace"
+appenders = ["file"]
+additive = true
+

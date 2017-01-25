@@ -30,8 +30,26 @@
  *
  */
 
+#![deny(unused_mut)]
+extern crate zookeeper;
 #[macro_use]
 extern crate log;
+extern crate log4rs;
+extern crate time;
+extern crate rustc_serialize;
+extern crate docopt;
+extern crate errno;
+extern crate libc;
 extern crate kafka;
+#[macro_use]
+extern crate chan;
+extern crate chan_signal;
+//extern crate dtrace_rust;
+
+
+//#[macro_use]
+//extern crate log;
+//extern crate kafka;
+//extern crate rustc_serialize;
 
 pub mod instrument;

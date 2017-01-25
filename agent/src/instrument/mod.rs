@@ -30,11 +30,11 @@
  *
  */
 
+extern crate toml;
 //extern crate log;
 //extern crate log4rs;
 //extern crate time;
 extern crate libc;
-//extern crate rustc_serialize;
 //extern crate docopt;
 //extern crate errno;
 //extern crate kafka;
@@ -46,14 +46,86 @@ use self::libdtrace::dtrace_workstatus_t;
 use std::process::exit;
 use std::default::Default;
 use std::sync::mpsc;
+use std::os::raw::c_char;
 
 mod libdtrace;
 mod libxo;
+
+#[derive(Debug, RustcDecodable)]
+struct Config {
+    instrumentation: Option<Instrumentation>,
+}
+
+#[derive(Debug, RustcDecodable)]
+struct Instrumentation {
+    comment: Option<String>,
+    script: Option<String>,
+    server: Option<ServerConfig>,
+}
+
+#[derive(Debug, RustcDecodable)]
+struct ServerConfig {
+   ip: Option<String>,
+   port: Option<u16>,
+}
 
 #[derive(PartialEq)]
 pub enum InstrumentationThreadMessage {
    Stop,
 }
+
+struct TransportBridge {
+    lib: libloading::Library,
+}
+
+impl TransportBridge {
+		   
+    fn new(transport_plugin: &'static str) -> TransportBridge {
+
+       TransportBridge {
+	    lib: libloading::Library::new(transport_plugin).unwrap(),
+       }
+    }
+
+    fn close(&self) -> i32 {
+      trace!("close()");
+      unsafe {
+           if let Ok(close_func) = self.lib.get::<libloading::Symbol<unsafe extern fn() -> i32>>(DT_CLOSE_FCN) {
+               close_func()
+           } else {
+               -1
+           }
+       }
+    }
+
+    fn open(&self, config: &str) -> i32 {
+      trace!("open()");
+      unsafe {
+           if let Ok(open_func) =
+               self.lib.get::<libloading::Symbol<unsafe extern fn(* const c_char) -> i32>>(DT_OPEN_FCN) {
+               open_func(CString::new(config).unwrap().as_ptr())
+           } else {
+               -1
+           }
+       }
+    }
+
+    fn write(&self, data: &[u8]) ->i32 {
+       trace!("write({:?})", data);
+       unsafe {
+           if let Ok(write_func) =
+               self.lib.get::<libloading::Symbol<unsafe extern fn(&[u8]) -> i32>>(DT_WRITE_FCN) {
+               write_func(data)
+           } else {
+               -1
+           }
+       }
+    }
+}
+
+const DT_OPEN_FCN: &'static[u8] = b"dt_transport_open";
+const DT_CLOSE_FCN: &'static[u8] = b"dt_transport_close";
+const DT_WRITE_FCN: &'static[u8] = b"dt_transport_write";
 
 // libdtrace constants;
 // note these do not get generated automatically by the 'bindgen' tool
@@ -213,8 +285,13 @@ pub fn instrument_endpoint(script: String,
     dtrace_setopt(handle, "temporal", "4m");;
     dtrace_setopt(handle, "arch", "x86_64");;
     info!("dtrace options set");
- 
-    let prog = dtrace_program_strcompile(handle, script.as_str(),
+
+    let config: Config = unsafe {
+        toml::decode_str(script.as_str()).unwrap()
+    };
+
+    let instr_script = config.instrumentation.unwrap().script.unwrap();
+    let prog = dtrace_program_strcompile(handle, instr_script.as_str(),
         self::libdtrace::dtrace_probespec::DTRACE_PROBESPEC_NAME, 0x0080);
     if prog.is_null() {
         error!("failed to compile dtrace program {}",
@@ -241,13 +318,18 @@ pub fn instrument_endpoint(script: String,
        exit(1);
     }
     info!("dtrace instrumentation started...");
+   
+    let mut handler = TransportBridge::new("../transport/tcp/target/debug/libddtrace_tcp.so");
+    handler.open(script.as_str());
 
-    if dtrace_handle_buffered(handle, buffered_handler,
-        ::std::ptr::null_mut()) == -1 {
-        error!("failed to register dtrace buffered handler");
-        exit(1);
-    }
-
+    unsafe{
+            let lib_ptr: *mut ::std::os::raw::c_void = &mut handler as *mut _ as *mut ::std::os::raw::c_void;
+            if dtrace_handle_buffered(handle, buffered_handler,
+                lib_ptr /*as *mut ::std::os::raw::c_void*/) == -1 {
+                error!("failed to register dtrace buffered handler");
+                exit(1);
+            }
+    
     let mut done = false;
     while {
         if done == false {
@@ -280,6 +362,9 @@ pub fn instrument_endpoint(script: String,
 
         done == false
     } {}
+}
+    // Close the transport handler
+    handler.close();
 
     info!("dtrace stopping");
     dtrace_stop(handle);
@@ -290,18 +375,11 @@ pub fn instrument_endpoint(script: String,
 
 unsafe extern fn buffered_handler(
    bufdata : *const self::libdtrace::dtrace_bufdata_t,
-   _arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
+   arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
        
-   info!("buffered_handler {:?}", CStr::from_ptr((* bufdata).dtbda_buffered));
- 
-   match libloading::Library::new("../transport/tcp/target/debug/libddtrace_tcp.so") {
-      Ok(lib) => {
-         if let Ok(func) =lib.get::<libloading::Symbol<unsafe extern fn(&[u8]) -> i32>>(b"my_write") {
-            func(CStr::from_ptr((* bufdata).dtbda_buffered).to_bytes())
-         } else { -1 }
-      },
-      Err(_e) => { -1 }
-   }
+   // Write the records upstream using the specified transport handler
+   let handler = arg as *const TransportBridge;
+   (* handler).write(CStr::from_ptr((* bufdata).dtbda_buffered).to_bytes())
 }
 
 unsafe extern fn ddtrace_xo_write(_arg1: *mut ::std::os::raw::c_void,
@@ -337,21 +415,13 @@ unsafe extern fn chew(data: *const self::libdtrace::dtrace_probedata_t,
     info!("chew");
 
     // Create a libxo handle
-    let xop = xo_create(XO_STYLE_JSON, XOF_WARN | XOF_DTRT);
+/*    let xop = xo_create(XO_STYLE_JSON, XOF_WARN | XOF_DTRT);
     xo_set_writer(xop, ::std::ptr::null_mut(),
         Some(ddtrace_xo_write), None, None);
 
     let handle = arg as *mut self::libdtrace::dtrace_hdl_t;
     (* handle).dt_xo_hdl = xop as *mut self::libdtrace::xo_handle_s;
- 
-   match libloading::Library::new("../transport/tcp/target/debug/libddtrace_tcp.so") {
-      Ok(lib) => {
-         if let Ok(func) =lib.get::<libloading::Symbol<unsafe extern fn() -> i32>>(b"my_open") {
-            func();
-         } else { return DTRACE_CONSUME_NEXT; }
-      },
-      Err(_e) => { return DTRACE_CONSUME_NEXT; }
-   }
+ */
 
     let pd: *mut self::libdtrace::dtrace_probedesc_t = (* data).dtpda_pdesc;
     //trace!("id = {}", (* pd).dtpd_id); timestamp
@@ -374,18 +444,9 @@ unsafe extern fn chewrec(_data: *const self::libdtrace::dtrace_probedata_t,
     if rec.is_null() {
         // Consume next record - DTRACE_CONSUME_NEXT
         trace!("consume next");
- 
-   match libloading::Library::new("../transport/tcp/target/debug/libddtrace_tcp.so") {
-      Ok(lib) => {
-         if let Ok(func) =lib.get::<libloading::Symbol<unsafe extern fn() -> i32>>(b"my_close") {
-            func();
-         } else { return DTRACE_CONSUME_NEXT; }
-      },
-      Err(_e) => { return DTRACE_CONSUME_NEXT; }
-   }
-        let handle = arg as *mut self::libdtrace::dtrace_hdl_t;
+  /*      let handle = arg as *mut self::libdtrace::dtrace_hdl_t;
 	xo_finish_h((* handle).dt_xo_hdl as *mut libxo::xo_handle_s);
-        xo_destroy((* handle).dt_xo_hdl as *mut libxo::xo_handle_s);
+        xo_destroy((* handle).dt_xo_hdl as *mut libxo::xo_handle_s);*/
         return DTRACE_CONSUME_NEXT;
     } else {
         let action = (* rec).dtrd_action;
