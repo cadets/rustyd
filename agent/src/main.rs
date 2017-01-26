@@ -54,7 +54,7 @@ use std::default::Default;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
-use zookeeper::{acls, CreateMode, Watcher, WatchedEvent, WatchedEventType, ZkResult, ZkState, ZooKeeper};
+use zookeeper::{acls, CreateMode, Watcher, WatchedEvent, ZkResult, ZkState, ZooKeeper};
 use zookeeper::recipes::cache::{PathChildrenCache, PathChildrenCacheEvent};
 use chan_signal::Signal;
 
@@ -104,6 +104,16 @@ struct Instrumentation {
    script: String,
 }
 
+impl Instrumentation {
+    fn new(tx: mpsc::Sender<InstrumentationThreadMessage>, script: String)
+        -> Instrumentation {
+      Instrumentation {
+         tx: tx,
+         script: script,
+      }
+   }
+}
+
 #[derive(RustcDecodable)]
 struct Args {
     flag_z: String,
@@ -113,37 +123,6 @@ struct LoggingWatcher;
 impl Watcher for LoggingWatcher {
    fn handle(&self, event: WatchedEvent) {
       info!("{:?}", event);
-   }
-}
-
-struct EndpointInstrumentationPathWatcher {
-    endpoint : Arc<InstrumentedEndpoint>,
-}
-
-impl EndpointInstrumentationPathWatcher {
-    pub fn new(endpoint: Arc<InstrumentedEndpoint>) -> EndpointInstrumentationPathWatcher {
-        EndpointInstrumentationPathWatcher  {
-           endpoint: endpoint,
-       }
-    }
-}
-  
-impl Watcher for EndpointInstrumentationPathWatcher {
-   fn handle(&self, event: WatchedEvent) {
-      trace!("{:?}", event);
-      match event.event_type {
-         WatchedEventType::NodeCreated => {
-             info!("endpoint node created");
-
-         process_instrumentation(self.endpoint.clone());
-         },
-         WatchedEventType::NodeDeleted => {
-             // TODO do I need to handle this?
-             // Looks like if the node is delete I no longer get told about it being added
-             // again
-         }
-         _ => { warn!("unhandled WatchedEvent {:?}", event); }
-      }
    }
 }
 
@@ -185,9 +164,8 @@ fn register_endpoint(endpoint: Arc<InstrumentedEndpoint>) -> ZkResult<String> {
     let hostname_path_data = format!("{name} ({version})",
     name = NAME, version = VERSION).to_string().into_bytes();
         
-    let value = try!(endpoint.zk.create(hostname_path.as_ref(), hostname_path_data,                
-    acls::OPEN_ACL_UNSAFE.clone(),
-    CreateMode::Ephemeral));
+    let value = try!(endpoint.zk.create(hostname_path.as_ref(), hostname_path_data,
+           acls::OPEN_ACL_UNSAFE.clone(), CreateMode::Ephemeral));
     Ok(value)
 } 
 
@@ -221,17 +199,16 @@ fn process_instrumentation(endpoint: Arc<InstrumentedEndpoint>) -> ZkResult<()> 
                         trace!("spawned instrumentation thread");
 
                         // Update the instrumentation managed by the endpoint
-                        let instrumentation =
-                        Instrumentation{tx: tx, script: script_str_copy};
-                        endpoint.instrumentation.lock().unwrap().insert(script, instrumentation);
+                        let instrumentation = Instrumentation::new(tx, script_str_copy);
+                        endpoint.instrumentation.lock().unwrap().insert(
+                            script, instrumentation);
                     },
                     Err(e) => {
                         error!("Failed spawning thread to instrument endpoint{:?}", e)
                     }
                 }; 
             },
-            PathChildrenCacheEvent::ChildUpdated(
-                _script, _script_data) => {
+            PathChildrenCacheEvent::ChildUpdated(_script, _script_data) => {
                 // TODO
             },
             PathChildrenCacheEvent::ChildRemoved(script) => {
@@ -295,7 +272,7 @@ fn main() {
 
                 let endpoint = endpoint_arc.clone();
                 match register_endpoint(endpoint) {
-                    Ok(value) => {
+                    Ok(_value) => {
                         match process_instrumentation(endpoint_arc.clone()) {
                             Ok(_subscription) => {
                                 // Wait for message indicating thread should cleanup
@@ -346,13 +323,20 @@ fn main() {
 
                         // Send message to main_thread to terminate
                         // Note: Rust's JoinHandle does not support a timeout
-                        tx.send(InstrumentationThreadMessage::Stop);
-                        match child.join() {
+                        match tx.send(InstrumentationThreadMessage::Stop) {
                             Ok(_) => {
-                                trace!("main_thread terminated");
+                                match child.join() {
+                                    Ok(_) => {
+                                        trace!("main_thread terminated");
+                                    },
+                                    Err(err) => {
+                                        error!("Failed joining mani_thread: {:?}", err);
+                                    }
+                                }
                             },
                             Err(err) => {
-                                error!("Failed joining mani_thread: {:?}", err);
+                                error!("Failed sending stop message to main_thread: {:?}",
+                                    err);
                             }
                         }
                         break;
