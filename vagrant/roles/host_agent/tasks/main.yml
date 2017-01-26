@@ -1,0 +1,28 @@
+---
+- name: Install Rust
+  become: yes
+  pkgng: name=rust state=present
+
+- name: Install Cargo
+  become: yes
+  pkgng: name=cargo state=present
+
+- name: Update Rust
+  raw: sudo curl -sf https://static.rust-lang.org/rustup.sh | sh
+
+- name: Install git
+  become: yes
+  pkgng: name=git state=present
+
+- name: Clone rustyd
+  git: repo=git@github.com:cadets/rustyd.git dest=rustyd update=yes accept_hostkey=yes
+
+- name: Install libsnappy
+  become: yes
+  pkgng: name=snappy state=present
+
+- name: Build rustyd
+  command: cargo build chdir=rustyd/agent
+  notify:
+    - Start rustyd
+...

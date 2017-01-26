@@ -1,0 +1,5 @@
+---
+- name: Start rustyd
+  become: yes
+  command: daemon -- target/debug/dtrace_rust -z kafka.cadets:2181 -o ddtrace-query-response -b kafka.cadets chdir=rustyd/agent
+...

@@ -1,0 +1,4 @@
+---
+- name: Start OPUS 
+  command: opusctl server start chdir=opus/bin
+...
