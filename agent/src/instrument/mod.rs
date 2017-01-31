@@ -287,8 +287,16 @@ pub fn instrument_endpoint(script: String,
     info!("dtrace options set");
 
     let config: Config = unsafe {
-        toml::decode_str(script.as_str()).unwrap()
+        match toml::decode_str(script.as_str()) {
+            Some(config) => { config },
+            None => {
+                error!("Failed decoding TOML config");
+                return;
+            }
+        }
     };
+
+    info!("Here {:?}", config);
 
     let instr_script = config.instrumentation.unwrap().script.unwrap();
     let prog = dtrace_program_strcompile(handle, instr_script.as_str(),
