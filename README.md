@@ -2,11 +2,10 @@
 
 ## Rust
 
-To install Rust 1.7 and cargo on FreeBSD:
+To install Rust 1.12 and cargo on FreeBSD:
 
 ```shell
-pkg install rust
-pkg install cargo
+pkg install rust cargo
 ```
 
 To update Rust to the latest version:
@@ -18,15 +17,27 @@ curl -ssf https://static.rust-lang.org/rustup.sh | sh
 
 ## libdtrace bindings
 
+To install clang from ports so that bindgen can find libclang.so:
+
+```shell
+pkg install clang38
+```
+
+To install snappy
+
+```shell
+pkg install snappy
+```
+
 Rust bindings for `libdtrace` can be (more or less) automatically generated
 using `rust-bindgen`:
 
 ```shell
 cargo install bindgen
 
-export C_INCLUDE_PATH=/sys/cddl/compat/opensolaris:/sys/cddl/contrib/opensolaris/uts/common
+export C_INCLUDE_PATH=/usr/src/sys/cddl/compat/opensolaris:/usr/src/sys/cddl/contrib/opensolaris/uts/common
 
-~/.cargo/bin bindgen --output libdtrace.rs --builtins /usr/src/cddl/contrib/opensolaris/lib/libdtrace/common/dtrace.h
+~/.cargo/bin/bindgen --output libdtrace.rs --builtins /usr/src/cddl/contrib/opensolaris/lib/libdtrace/common/dtrace.h
 ```
 
 ### build.rs
