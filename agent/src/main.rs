@@ -54,7 +54,7 @@ use std::default::Default;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
-use zookeeper::{acls, CreateMode, Watcher, WatchedEvent, ZkResult, ZkState, ZooKeeper};
+use zookeeper::{acls, CreateMode, Watcher, WatchedEvent, WatchedEventType, ZkResult, ZkState, ZooKeeper};
 use zookeeper::recipes::cache::{PathChildrenCache, PathChildrenCacheEvent};
 use chan_signal::Signal;
 
@@ -81,6 +81,7 @@ const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 // ZooKeeper paths
 const DDTRACE_PATH: &'static str = "/ddtrace";
+const DDTRACE_ENDPOINTS_PATH: &'static str = "/ddtrace/endpoints";
 const DDTRACE_INSTRUMENTATION_PATH: &'static str = "/ddtrace/instrumentation";
 
 struct InstrumentedEndpoint {
@@ -104,16 +105,6 @@ struct Instrumentation {
    script: String,
 }
 
-impl Instrumentation {
-    fn new(tx: mpsc::Sender<InstrumentationThreadMessage>, script: String)
-        -> Instrumentation {
-      Instrumentation {
-         tx: tx,
-         script: script,
-      }
-   }
-}
-
 #[derive(RustcDecodable)]
 struct Args {
     flag_z: String,
@@ -123,6 +114,37 @@ struct LoggingWatcher;
 impl Watcher for LoggingWatcher {
    fn handle(&self, event: WatchedEvent) {
       info!("{:?}", event);
+   }
+}
+
+struct EndpointInstrumentationPathWatcher {
+    endpoint : Arc<InstrumentedEndpoint>,
+}
+
+impl EndpointInstrumentationPathWatcher {
+    pub fn new(endpoint: Arc<InstrumentedEndpoint>) -> EndpointInstrumentationPathWatcher {
+        EndpointInstrumentationPathWatcher  {
+           endpoint: endpoint,
+       }
+    }
+}
+  
+impl Watcher for EndpointInstrumentationPathWatcher {
+   fn handle(&self, event: WatchedEvent) {
+      trace!("{:?}", event);
+      match event.event_type {
+         WatchedEventType::NodeCreated => {
+             info!("endpoint node created");
+
+         process_instrumentation(self.endpoint.clone());
+         },
+         WatchedEventType::NodeDeleted => {
+             // TODO do I need to handle this?
+             // Looks like if the node is delete I no longer get told about it being added
+             // again
+         }
+         _ => { warn!("unhandled WatchedEvent {:?}", event); }
+      }
    }
 }
 
@@ -160,12 +182,13 @@ fn register_endpoint(endpoint: Arc<InstrumentedEndpoint>) -> ZkResult<String> {
     // Register endpoint in ZooKeeper
     // (The endpoint is registered as an ephemeral node, thus it serves
     // as an indication that the endpoint is alive and available to instrument)
-    let hostname_path = format!("{}/{}", DDTRACE_PATH, endpoint.name);
+    let hostname_path = format!("{}/{}", DDTRACE_ENDPOINTS_PATH, endpoint.name);
     let hostname_path_data = format!("{name} ({version})",
     name = NAME, version = VERSION).to_string().into_bytes();
         
-    let value = try!(endpoint.zk.create(hostname_path.as_ref(), hostname_path_data,
-           acls::OPEN_ACL_UNSAFE.clone(), CreateMode::Ephemeral));
+    let value = try!(endpoint.zk.create(hostname_path.as_ref(), hostname_path_data,                
+    acls::OPEN_ACL_UNSAFE.clone(),
+    CreateMode::Ephemeral));
     Ok(value)
 } 
 
@@ -199,16 +222,17 @@ fn process_instrumentation(endpoint: Arc<InstrumentedEndpoint>) -> ZkResult<()> 
                         trace!("spawned instrumentation thread");
 
                         // Update the instrumentation managed by the endpoint
-                        let instrumentation = Instrumentation::new(tx, script_str_copy);
-                        endpoint.instrumentation.lock().unwrap().insert(
-                            script, instrumentation);
+                        let instrumentation =
+                        Instrumentation{tx: tx, script: script_str_copy};
+                        endpoint.instrumentation.lock().unwrap().insert(script, instrumentation);
                     },
                     Err(e) => {
                         error!("Failed spawning thread to instrument endpoint{:?}", e)
                     }
                 }; 
             },
-            PathChildrenCacheEvent::ChildUpdated(_script, _script_data) => {
+            PathChildrenCacheEvent::ChildUpdated(
+                _script, _script_data) => {
                 // TODO
             },
             PathChildrenCacheEvent::ChildRemoved(script) => {
@@ -248,107 +272,70 @@ fn main() {
       .and_then(|d| d.decode())
       .unwrap_or_else(|e| e.exit());
 
-    // Start a new thread for the requested instrumentation 
-    let (tx, rx): (mpsc::Sender<InstrumentationThreadMessage>,
-        mpsc::Receiver<InstrumentationThreadMessage>) = mpsc::channel();
-    let main_thread = thread::Builder::new();       
-    match main_thread.spawn(move || {
-        // Create a connection to ZooKeeper
-        info!("connecting to ZooKeeper {}", args.flag_z);
-        match ZooKeeper::connect(&*args.flag_z, Duration::from_secs(5), LoggingWatcher) {
-            Ok(zk) => {
-                let endpoint_arc = Arc::new(
-                    InstrumentedEndpoint::new(Arc::new(zk)));
+   // Create a connection to ZooKeeper
+   info!("connecting to ZooKeeper {}", args.flag_z);
+   match ZooKeeper::connect(&*args.flag_z, Duration::from_secs(5), LoggingWatcher) {
+      Ok(zk) => {
+         let endpoint_arc = Arc::new(
+            InstrumentedEndpoint::new(Arc::new(zk)));
 
-                // Register for changes in the ZooKeeper state
-                // (currently unused, but could re-establish connections and so on)
-                let zk_cleanup = endpoint_arc.zk.clone();
-                let zk_listen_subscription =
-                    endpoint_arc.zk.clone().add_listener(move |state: ZkState| {
-                    match state {
-                        _ => { trace!("zkState = {:?}", state); }
-                    }
-                });
+         // Register for changes in the ZooKeeper state
+         // (currently unused, but could re-establish connections and so on)
+         let zk_cleanup = endpoint_arc.zk.clone();
+         let zk_listen_subscription =
+            endpoint_arc.zk.clone().add_listener(move |state: ZkState| {
+            match state {
+               _ => { trace!("zkState = {:?}", state); }
+            }
+         });
 
-                let endpoint = endpoint_arc.clone();
-                match register_endpoint(endpoint) {
-                    Ok(_value) => {
-                        match process_instrumentation(endpoint_arc.clone()) {
-                            Ok(_subscription) => {
-                                // Wait for message indicating thread should cleanup
-                                loop {
-                                    match rx.recv() {
-                                        _ => { break; }
-                                    }
-                                }
-                            },
-                            Err(e) => {
-                                error!("error registering endpoint with Zookeeper {:?}",
-                                    e);
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        error!("error registering endpoint with Zookeeper {:?}", e);
-                    }
-                }
+         let endpoint = endpoint_arc.clone();
+         match register_endpoint(endpoint) {
+             Ok(value) => {
+
+                 match process_instrumentation(endpoint_arc.clone()) {
+                     Ok(_subscription) => {
+                         info!("value {}", value);
+                         loop {
+                             chan_select! {
+                                 // Await notified signals (SIGINT and SIGTERM)
+                                 signal.recv() -> signal => {
+                                     trace!("received signal SIG{:?}", signal.unwrap());
+                                     break;
+                                 },
+                             }
+                         }
+                     },
+                     Err(e) => {
+                         error!("error registering endpoint with Zookeeper {:?}", e);
+                     }
+                 }
+             },
+             Err(e) => {
+                 error!("error registering endpoint with Zookeeper {:?}", e);
+             }
+         }
                  
-                // Remove ZooKeeper state listener
-                info!("removing ZooKeeper connection state listener");
-                zk_cleanup.remove_listener(zk_listen_subscription);
+         // Remove ZooKeeper state listener
+         info!("removing ZooKeeper connection state listener");
+         zk_cleanup.remove_listener(zk_listen_subscription);
 
-                // Close ZooKeeper handle
-                info!("closing ZooKeeper connection");
-                match zk_cleanup.close() {
-                    Ok(_) => {
-                        info!("closed Zookeeper connection")
-                    },
-                    Err(e) => {
-                        error!("failed closing ZooKeeper connection: {:?}", e);
-                    }
-                }
-
+         // Close ZooKeeper handle
+         info!("closing ZooKeeper connection");
+         match zk_cleanup.close() {
+            Ok(_) => {
+                info!("closed Zookeeper connection")
             },
             Err(e) => {
-                error!("could not connect to ZooKeeper {}: {:?}", args.flag_z, e);
+                error!("failed closing ZooKeeper connection: {:?}", e);
             }
-        }
-    }) {
-        Ok(child) => {
-            loop {
-                chan_select! {
-                    // Await notified signals (SIGINT and SIGTERM)
-                    signal.recv() -> signal => {
-                        trace!("received signal SIG{:?}", signal.unwrap());
+         }
 
-                        // Send message to main_thread to terminate
-                        // Note: Rust's JoinHandle does not support a timeout
-                        match tx.send(InstrumentationThreadMessage::Stop) {
-                            Ok(_) => {
-                                match child.join() {
-                                    Ok(_) => {
-                                        trace!("main_thread terminated");
-                                    },
-                                    Err(err) => {
-                                        error!("Failed joining mani_thread: {:?}", err);
-                                    }
-                                }
-                            },
-                            Err(err) => {
-                                error!("Failed sending stop message to main_thread: {:?}",
-                                    err);
-                            }
-                        }
-                        break;
-                    },
-                }
-            }
-                
-            info!("cleanup finished");
-        },
-        Err(err) => {
-            error!("Failed to spawn main thread {:?}", err);
-        }
+         info!("cleanup finished");
+      },
+      Err(e) => {
+         error!("could not connect to ZooKeeper {}: {:?}", args.flag_z, e);
+      }
    }
 }
 
