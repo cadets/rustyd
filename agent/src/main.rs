@@ -200,8 +200,6 @@ fn process_instrumentation(endpoint: Arc<InstrumentedEndpoint>) -> ZkResult<()> 
 
     let mut pcc = PathChildrenCache::new(endpoint.zk.clone(),
         endpoint_instrumentation_path.as_ref()).unwrap();
-    try!(pcc.start());
-    info!("cache started {}", endpoint_instrumentation_path);
 
     let _pcc_subscription = pcc.add_listener(move |e| {
         match e {
@@ -254,6 +252,9 @@ fn process_instrumentation(endpoint: Arc<InstrumentedEndpoint>) -> ZkResult<()> 
             _ => { trace!("PathChildrenCacheEvent {:?}", e); }
         }
     });
+
+    try!(pcc.start());
+    info!("cache started {}", endpoint_instrumentation_path);
     Ok(())
 }
 
