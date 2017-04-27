@@ -2,6 +2,20 @@
 
 This document gives a brief description of the Vagrant environment used for testing the *rustyd* client.
 
+## Pre-requisites
+
+The Vagrant setup depends on haaving a few packages installed.  The
+following is a list of packages required to run the vagrant
+environtment on a Mac.
+
+Vagrant: <https://www.vagrantup.com>
+
+Virtual Box: <https://www.virtualbox.org/wiki/Downloads>
+
+dnsmasq: Install using homebrew <https://brew.sh> `brew install dnsmasq`
+
+ansible: `brew install ansible`
+
 All of the virtual machines in the test setup are configured with two network interfaces. It is a hard and fast requirement of Vagrant requires the first interface is NAT'd. If this not present Vagrant is unable to configure port formwarding between the guest and host. As a result SSH access (`vagrant shh`) wouldn't work and provisioning the VM fails.
 
 The virtual machines' second interface is configured for the network vboxnet0 (172.16.100.0/24).  DHCP is used to assign IP addresses on the vboxnet0 network. This can be achieved either with VirtualBox's internal DHCP server or with a stand alone DHCP server such as *dnsmasq*. (I prefer the latter option as it gives greater control and visibility). Note that the configuration file _pxeboot-dnsmasq.conf_ can be used to configure dnsmasq for the vboxnet0 network as follows:
