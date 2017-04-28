@@ -10,16 +10,47 @@
   become: yes
   apt: name=python-pip state=present
 
+- name: Upgrade pip
+  pip:
+    name: pip
+    extra_args: --upgrade
+
+- name: Install unzip
+  become: yes
+  apt: name=unzip state=present
+
+- name: Install cmake 
+  become: yes
+  apt: name=cmake state=present
+
+- name: Install liblzma-dev 
+  become: yes
+  apt: name=liblzma-dev state=present
+
+- name: Install Protocol Buffers dependencies
+  become: yes
+  apt: name={{item}} state=present
+  with_items:
+    - protobuf-compiler
+    - libprotobuf-dev
+
+- name: Install protobuf-compiler
+  become: yes
+  apt: name=protobuf-compiler state=present
+
+- name: Install setuptools
+  become: yes
+  pip: name=setuptools state=present
+
 - name: Clone OPUS
   git: repo=git@github.com:cadets/opus.git dest=opus update=yes accept_hostkey=yes version=cadets-rustyd
-
 
 - name: Build OPUS 
   command: "{{ item }} chdir=opus"
   with_items:
     - ./build.sh
   environment:
-    JAVA_HOME: /usr/local/openjdk8
+    JAVA_HOME: /usr/lib/jvm/java-1.8.0-openjdk-amd64
 #  notify:
 #     Start OPUS
 ...
