@@ -34,15 +34,51 @@
 extern crate log;
 #[macro_use]
 extern crate lazy_static;
+extern crate toml;
+extern crate rustc_serialize;
 
 use std::io::prelude::*;
+use std::io::BufWriter;
 use std::net::TcpStream;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::net::IpAddr;
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::ffi::CStr;
+
+#[derive(Debug, RustcDecodable)]
+struct Config {
+    instrumentation: Option<Instrumentation>,
+}
+
+#[derive(Debug, RustcDecodable)]
+struct Instrumentation {
+    server: Option<ServerConfig>,
+}
+
+#[derive(Debug, RustcDecodable)]
+struct ServerConfig {
+    ip: Option<String>,
+    port: Option<u16>,
+}
+
+struct Context {
+    handle_map: Mutex<HashMap<i32, TcpStream>>,
+    //handle_map: Mutex<HashMap<i32, BufWriter<TcpStream>>>,
+}
+
+impl Context {
+    pub fn new() -> Context {
+        Context {
+            handle_map: Mutex::new(HashMap::new()),
+            // let handle_base = rng::thread_rng().gen::<i32>();
+        }
+    }
+}
 
 lazy_static! {
-    static ref HANDLE_MAP: Mutex<HashMap<i32, TcpStream>> =
-        Mutex::new(HashMap::new());
+   static ref CONTEXT: Context = Context::new();
 }
 
 #[cfg(test)]
@@ -53,45 +89,57 @@ mod tests {
 }
 
 #[no_mangle]
-pub fn my_init() -> i32
+pub fn dt_transport_init() -> i32
 {
    0
 }
 
 #[no_mangle]
-pub fn my_fini() -> i32
+pub fn dt_transport_fini() -> i32
 {
    0
 }
 
 #[no_mangle]
-pub fn my_open() -> i32
+pub fn dt_transport_open(config_raw: * const std::os::raw::c_char) -> i32
 {
-    let mut stream = TcpStream::connect("127.0.0.1:34254").unwrap();
-    HANDLE_MAP.lock().unwrap().insert(100, stream);
-    100
-}
+    if let Ok(config_str) = unsafe { CStr::from_ptr(config_raw).to_str() } {
+        // Read the configuration (a TOML formated string)
+        trace!("TCP stream configuration {:?}", config_str);
+        if let Some(handle) = toml::decode_str::<Config>(config_str)
+            .and_then(|config| { config.instrumentation } )
+            .and_then(|instrumentation| { instrumentation.server } )
+            .and_then(|server| {
+                if server.ip.is_some() && server.port.is_some() {
+                    let ip = IpAddr::from_str(server.ip.unwrap().as_str()).unwrap();
+                    let port = server.port.unwrap();
+                    let addr = SocketAddr::new(ip, port);
 
-#[no_mangle]
-pub fn my_close() -> i32
-{
-    let mut _stream = HANDLE_MAP.lock().unwrap().remove(&100);
-    100
-}
+                    //let stream = BufWriter::new(TcpStream::connect(addr).unwrap());
+                    match TcpStream::connect(addr) {
+                        Ok(tcp_stream) => {
+                            info!("Opened new TCP connection to {}", addr);
 
-#[no_mangle]
-pub fn my_read() -> i32
-{
-   100
-}
-
-#[no_mangle]
-pub fn my_write(data: &[u8]) -> i32
-{
-    if let Some(mut stream)= HANDLE_MAP.lock().unwrap().get(&100) {
-        match stream.write_all(data) {
-            Ok(_) => { 0 },
-            Err(err) => { -1 }
+                            // Generate a random handle for the tcp stream
+                            let handle = 100;
+                            // handle = CONTEXT.handle_base;
+                            // CONTEXT.handle_base += 1;
+                            trace!("Storing new TCP handle connection handle {}", handle);
+                            CONTEXT.handle_map.lock().unwrap().insert(handle, tcp_stream);
+                            Some(handle) 
+                        },
+                        Err(e) => {
+                            error!("Failed opened new TCP connection to {}: {:?}", addr, e);
+                            None
+                        }
+                    }
+                } else { 
+                    None
+                }
+        }) {
+            handle 
+        } else {
+            -1
         }
     } else {
         -1
@@ -99,8 +147,86 @@ pub fn my_write(data: &[u8]) -> i32
 }
 
 #[no_mangle]
-pub fn my_flush() -> i32
+//pub fn dt_transport_close(handle: i32) -> i32
+pub fn dt_transport_close() -> i32
 {
-   100
+    // Remove the stream from the CONTEXT handle_map.
+    // This will close the underlying TCP connection.
+    let handle = 100;
+
+    if let Some(stream) = CONTEXT.handle_map.lock().unwrap().remove(&handle) {
+        // The stream is closed here
+        trace!("Closing TCP connection to {:?}", stream.peer_addr());
+        0
+    } else {
+        error!("error closing TCP connection invalid handle");
+        -1
+    }
 }
 
+#[no_mangle]
+//pub fn dt_transport_write(handle: i32, data: &[u8]) -> i32
+pub fn dt_transport_write(data: &[u8]) -> i32
+{
+    trace!("writing DTrace records {:?}", data);
+
+    let handle = 100;
+
+    if let Some(mut stream) = CONTEXT.handle_map.lock().unwrap().get(&handle) {
+        match stream.write(data) {
+            Ok(_) => {
+                info!("OK");
+                0
+            },
+            Err(err) => {
+                error!("Error writting to {:?}: {:?}", stream.peer_addr(), err);
+                -1
+            }
+        }
+    } else {
+        error!("handle not found");
+        -1
+    }
+}
+
+#[no_mangle]
+pub fn dt_transport_flush(handle: i32) -> i32
+{
+    if let Some(mut stream) = CONTEXT.handle_map.lock().unwrap().get(&handle) {
+        match stream.flush() {
+            Ok(_) => {
+                trace!("flushing DTrace records");
+                error!("OK");
+                0
+            },
+            Err(err) => {
+                trace!("Failed flushing DTrace records to {:?}: {:?}", stream.peer_addr(), err);
+                -1
+            }
+        }
+    } else {
+        error!("handle not found");
+        -1
+    }
+}
+#[no_mangle]
+pub fn dt_transport_writeall(handle: i32, data: &[u8]) -> i32
+{
+    trace!("writing DTrace records {:?}", data);
+
+    if let Some(mut stream) = CONTEXT.handle_map.lock().unwrap().get(&handle) {
+        match stream.write_all(data) {
+            Ok(_) => {
+                info!("OK");
+                0
+            },
+            Err(err) => {
+                error!("Error writting to {:?}: {:?}", stream.peer_addr(), err);
+                -1
+            }
+        }
+    } else {
+        error!("handle not found");
+        -1
+    }
+}
