@@ -11,9 +11,14 @@
   apt: name=python-pip state=present
 
 - name: Upgrade pip
+  become: yes
   pip:
     name: pip
     extra_args: --upgrade
+
+- name: Install setuptools
+  become: yes
+  pip: name=setuptools state=present
 
 - name: Install unzip
   become: yes
@@ -27,6 +32,10 @@
   become: yes
   apt: name=liblzma-dev state=present
 
+- name: Install libyajl
+  become: yes
+  apt: name=libyajl-dev state=present
+
 - name: Install Protocol Buffers dependencies
   become: yes
   apt: name={{item}} state=present
@@ -38,10 +47,6 @@
   become: yes
   apt: name=protobuf-compiler state=present
 
-- name: Install setuptools
-  become: yes
-  pip: name=setuptools state=present
-
 - name: Clone OPUS
   git: repo=git@github.com:cadets/opus.git dest=opus update=yes accept_hostkey=yes version=cadets-rustyd
 
@@ -50,7 +55,8 @@
   with_items:
     - ./build.sh
   environment:
-    JAVA_HOME: /usr/lib/jvm/java-1.8.0-openjdk-amd64
+    JAVA_HOME: '/usr/lib/jvm/java-1.8.0-openjdk-amd64'
+    VERSION: 0.0.1
 #  notify:
 #     Start OPUS
 ...
