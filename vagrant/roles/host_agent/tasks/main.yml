@@ -1,4 +1,70 @@
 ---
+- name: Install KDE
+  become: yes
+  pkgng: name=x11/kde4 state=present
+
+# Configure KDE
+- block:
+  - name: Configure DBUS
+    become: yes
+    sysrc:
+      name: dbus_enable
+      value: "YES"
+      state: present
+  - name: Configure HAL
+    become: yes
+    sysrc:
+      name: hald_enable
+      value: "YES"
+      state: present
+  - name: Configure KDE 
+    become: yes
+    sysrc:
+      name: kdm4_enable
+      value: "YES"
+      state: present
+  - name: Configure /proc 
+    become: yes
+    mount:
+      path: /proc
+      src: proc
+      fstype: procfs
+      opts: rw
+      state: present    
+
+- name: Configure hostname
+  sysrc:
+    name: hostname
+    value: "{{ inventory_hostname }}"
+    state: present
+
+# Update xf86-input-keyboard
+- block:
+  - name: Update the available remote repositories
+    become: yes
+    command: pkg update
+  - name: Perform upgrades of packaged software distributions
+    become: yes
+    command: pkg upgrade -y
+  - name: Install xf86-input-keyboard
+    become: yes
+    command: pkg install -y -f xf86-input-keyboard xf86-input-keyboard
+
+- block:
+  - name: Install Xorg 
+    become: yes
+    pkgng: name=xorg state=present
+  - name: Configure Xorg
+    become: yes
+    command: Xorg -configure
+ 
+- name: Configure the Audit daemon
+  become: yes
+  sysrc:
+    name: auditd_enable
+    state: present
+    value: "YES"
+
 - name: Install Rust
   become: yes
   pkgng: name=rust state=present
