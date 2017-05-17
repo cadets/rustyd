@@ -184,11 +184,13 @@ fn register_endpoint(endpoint: Arc<InstrumentedEndpoint>) -> ZkResult<String> {
     // as an indication that the endpoint is alive and available to instrument)
     let hostname_path = format!("{}/{}", DDTRACE_ENDPOINTS_PATH, endpoint.name);
     let hostname_path_data = format!("{name} ({version})",
-    name = NAME, version = VERSION).to_string().into_bytes();
-        
-    let value = try!(endpoint.zk.create(hostname_path.as_ref(), hostname_path_data,                
-    acls::OPEN_ACL_UNSAFE.clone(),
-    CreateMode::Ephemeral));
+        name = NAME, version = VERSION).to_string().into_bytes();
+   
+    let value = try!(endpoint.zk.create(
+        hostname_path.as_ref(),
+        hostname_path_data,                
+        acls::OPEN_ACL_UNSAFE.clone(),
+        CreateMode::Ephemeral));
     Ok(value)
 } 
 
@@ -275,7 +277,8 @@ fn main() {
 
    // Create a connection to ZooKeeper
    info!("connecting to ZooKeeper {}", args.flag_z);
-   match ZooKeeper::connect(&*args.flag_z, Duration::from_secs(5), LoggingWatcher) {
+   match ZooKeeper::connect(&*args.flag_z, Duration::from_secs(5),
+      LoggingWatcher) {
       Ok(zk) => {
          let endpoint_arc = Arc::new(
             InstrumentedEndpoint::new(Arc::new(zk)));

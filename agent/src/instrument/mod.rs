@@ -275,7 +275,8 @@ pub fn instrument_endpoint(script: String,
                 info!("dtrace instrumentation started...");
                
                 let mut handler = TransportBridge::new(
-                    "../transport/tcp/target/debug/libddtrace_tcp.so");
+                    "../transport/kafka/target/debug/libddtrace_kafka.so");
+                   // "../transport/tcp/target/debug/libddtrace_tcp.so");
                 handler.open(script.as_str());
 
                 unsafe {

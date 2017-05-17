@@ -33,8 +33,17 @@
 #[macro_use]
 extern crate log;
 extern crate kafka;
+#[macro_use]
+extern crate lazy_static;
+extern crate toml;
+extern crate rustc_serialize;
 
 use kafka::producer::{Producer, Record};
+use std::ffi::CStr;
+
+#[derive(Debug, RustcDecodable)]
+struct Config {
+}
 
 #[cfg(test)]
 mod tests {
@@ -44,28 +53,40 @@ mod tests {
 }
 
 #[no_mangle]
-pub fn my_init() -> i32
+pub fn dt_transport_init() -> i32
+{
+   0
+}
+
+
+#[no_mangle]
+pub fn dt_transport_fini() -> i32
 {
    0
 }
 
 #[no_mangle]
-pub fn my_open() -> i32
+pub fn dt_transport_open(config_raw: * const std::os::raw::c_char) -> i32
+{
+   if let Ok(config_str) = unsafe { CStr::from_ptr(config_raw).to_str() } {
+      let handle = 100;
+      handle
+   } else {
+      -1
+   }
+}
+
+#[no_mangle]
+pub fn dt_transport_close() -> i32
 {
    100
 }
 
 #[no_mangle]
-pub fn my_close() -> i32
-{
-   100
-}
-
-#[no_mangle]
-pub fn my_write(data: &[u8]) -> i32
+pub fn dt_transport_write(data: &[u8]) -> i32
 {
    let mut producer =
-        match Producer::from_hosts(vec!["172.16.100.165:9092".to_owned()])
+        match Producer::from_hosts(vec!["172.16.100.164:9092".to_owned()])
            .with_ack_timeout(1000)
            .with_required_acks(1)
            .create() {
@@ -85,19 +106,14 @@ pub fn my_write(data: &[u8]) -> i32
 }
 
 #[no_mangle]
-pub fn my_flush() -> i32
+pub fn dt_transport_flush() -> i32
 {
    100
 }
 
 #[no_mangle]
-pub fn my_api() -> i32
+pub fn dt_transport_writeall() -> i32
 {
    100
 }
 
-#[no_mangle]
-pub fn my_fini() -> i32
-{
-   0
-}

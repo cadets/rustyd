@@ -209,6 +209,7 @@ pub fn dt_transport_flush(handle: i32) -> i32
         -1
     }
 }
+
 #[no_mangle]
 pub fn dt_transport_writeall(handle: i32, data: &[u8]) -> i32
 {

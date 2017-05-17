@@ -4,8 +4,11 @@ version = "0.1.0"
 authors = ["Graeme Jenkinson <gcj21@cl.cam.ac.uk>"]
 
 [dependencies]
+lazy_static = "0.2.8"
 kafka = "0.3.2"
 log = "0.3.6"
+toml = "0.4.1"
+rustc-serialize = "0.3.1"
 
 [lib]
 name = "ddtrace_kafka"
