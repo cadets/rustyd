@@ -20,12 +20,17 @@ level = "warn"
 appenders = ["console"]
 
 [loggers."dtrace_rust"]
-level = "trace"
+level = "warn"
 appenders = ["file"]
 additive = true
 
 [loggers."ddtrace_tcp"]
-level = "trace"
+level = "warn"
+appenders = ["file"]
+additive = true
+
+[loggers."ddtrace_unix_socket"]
+level = "warn"
 appenders = ["file"]
 additive = true
 
