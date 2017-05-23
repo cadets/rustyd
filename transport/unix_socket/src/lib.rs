@@ -48,7 +48,9 @@ use std::os::unix::net::UnixStream;
 use std::sync::Mutex;
 use rand::Rng;
 
-static INVALID_HANDLE: i32 = -1;
+static SUCCESS: i32 = 0;
+static ERR_INVALID_HANDLE: i32 = -1;
+static ERR_INVALID_CONFIG: i32 = -2;
 
 #[derive(Debug, Deserialize)]
 struct Config {
@@ -91,18 +93,6 @@ mod tests {
 }
 
 #[no_mangle]
-pub fn dt_transport_init() -> i32
-{
-   0
-}
-
-#[no_mangle]
-pub fn dt_transport_fini() -> i32
-{
-   0
-}
-
-#[no_mangle]
 pub fn dt_transport_open(config_raw: * const std::os::raw::c_char) -> i32
 {
     // Read the configuration (a TOML formated string)
@@ -125,6 +115,8 @@ pub fn dt_transport_open(config_raw: * const std::os::raw::c_char) -> i32
                             //let handle = CONTEXT.conn_id.wrapping_add(1);
                             let handle = 100;
                             trace!("Storing new connection handle {}", handle);
+                            // TODO test if handle is already present
+                            // if CONTEXT.handle_map.lock().unwrap().contains_key(handle) {
                             CONTEXT.handle_map.lock().unwrap().insert(
                                 handle, buffer);
                             Some(handle) 
@@ -140,13 +132,13 @@ pub fn dt_transport_open(config_raw: * const std::os::raw::c_char) -> i32
             }) {
                handle 
             } else {
-                INVALID_HANDLE
+                ERR_INVALID_CONFIG
             }
         } else {
-            INVALID_HANDLE
+            ERR_INVALID_CONFIG
         }
     } else {
-        INVALID_HANDLE
+       ERR_INVALID_CONFIG
     }
 }
 
@@ -156,12 +148,12 @@ pub fn dt_transport_close(handle: i32) -> i32
     // Remove the stream from the CONTEXT handle_map.
     // This will close the underlying TCP connection.
     if let Some(stream) = CONTEXT.handle_map.lock().unwrap().remove(&handle) {
-        // The stream is closed here
-        trace!("Closing TCP connection to {:?}", stream);
-        0
+        // The stream is closed here (once removed from the map)
+        trace!("Closing connection to {:?}", stream);
+        SUCCESS
     } else {
         error!("Connection handle invalid");
-        -1
+        ERR_INVALID_HANDLE
     }
 }
 
@@ -175,7 +167,7 @@ pub fn dt_transport_write(handle: i32, data: &[u8]) -> i32
         match stream.write(data) {
             Ok(_) => {
                 trace!("Successfully wrote {:?} to {:?}", data, stream);
-                0
+                SUCCESS
             },
             Err(err) => {
                 error!("Error writing to {:?}: {:?}", stream, err);
@@ -184,7 +176,7 @@ pub fn dt_transport_write(handle: i32, data: &[u8]) -> i32
         }
     } else {
         error!("Connection handle invalid");
-        -1
+        ERR_INVALID_HANDLE
     }
 }
 
@@ -196,7 +188,7 @@ pub fn dt_transport_flush(handle: i32) -> i32
         match stream.flush() {
             Ok(_) => {
                 trace!("Successfully flushed {:?}", stream);
-                0
+                SUCCESS
             },
             Err(err) => {
                 error!("Failed flushing to {:?}: {:?}", stream, err);
@@ -205,7 +197,7 @@ pub fn dt_transport_flush(handle: i32) -> i32
         }
     } else {
         error!("Connection handle invalid");
-        -1
+        ERR_INVALID_HANDLE
     }
 }
 
@@ -217,15 +209,16 @@ pub fn dt_transport_writeall(handle: i32, data: &[u8]) -> i32
         match stream.write_all(data) {
             Ok(_) => {
                 trace!("Successfully wrote {:?} to {:?}", data, stream);
-                0
+                SUCCESS
             },
             Err(err) => {
-                error!("Error writting to {:?}: {:?}", stream, err);
+                error!("Error writing to {:?}: {:?}", stream, err);
+                // get raw_os_error
                 -1
             }
         }
     } else {
         error!("Connection handle invalid");
-        -1
+        ERR_INVALID_HANDLE
     }
 }
