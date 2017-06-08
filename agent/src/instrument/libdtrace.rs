@@ -5793,7 +5793,7 @@ extern "C" {
                              arg3: *mut ::std::os::raw::c_void)
      -> ::std::os::raw::c_int;
     pub fn dtrace_handle_drop(arg1: *mut dtrace_hdl_t,
-                              arg2: *mut dtrace_handle_drop_f,
+                              arg2: dtrace_handle_drop_f,
                               arg3: *mut ::std::os::raw::c_void)
      -> ::std::os::raw::c_int;
     pub fn dtrace_handle_proc(arg1: *mut dtrace_hdl_t,

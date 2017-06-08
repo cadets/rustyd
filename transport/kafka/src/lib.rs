@@ -40,10 +40,32 @@ extern crate rustc_serialize;
 
 use kafka::producer::{Producer, Record};
 use std::ffi::CStr;
+use std::io::BufWriter;
+use std::io::Write;
 
 #[derive(Debug, RustcDecodable)]
 struct Config {
 }
+
+/*
+impl Write for Producer {
+    fn write(&mut self, buf: &[u8]) -> Result<usize>{
+    }
+
+    fn flush(&mut self) -> Result<()>{
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> Result<()>{
+    }
+
+    fn write_fmt(&mut self, fmt: Arguments) -> Result<()>{
+    }
+
+    fn by_ref(&mut self, buf: &[u8]) -> &mut Self where Self: Sized
+    {
+    }
+}
+*/
 
 #[cfg(test)]
 mod tests {

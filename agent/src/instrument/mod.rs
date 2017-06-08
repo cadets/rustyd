@@ -33,12 +33,14 @@
 extern crate toml;
 extern crate libc;
 extern crate libloading;
+extern crate sysctl;
 
 use std::ffi::{CString, CStr};
 use self::libdtrace::dtrace_workstatus_t;
 use std::default::Default;
 use std::sync::mpsc;
 use std::os::raw::c_char;
+use std::str::from_utf8;
 
 mod libdtrace;
 
@@ -51,13 +53,6 @@ struct Config {
 struct Instrumentation {
     comment: Option<String>,
     script: Option<String>,
-    server: Option<ServerConfig>,
-}
-
-#[derive(Debug, RustcDecodable)]
-struct ServerConfig {
-   ip: Option<String>,
-   port: Option<u16>,
 }
 
 #[derive(PartialEq)]
@@ -66,47 +61,63 @@ pub enum InstrumentationThreadMessage {
 }
 
 struct TransportBridge {
+    handle: i32,
     lib: libloading::Library,
 }
 
+// TODO replace fix handle values with those returns by dylib
 impl TransportBridge {
 		   
     fn new(transport_plugin: &'static str) -> TransportBridge {
 
        TransportBridge {
-	    lib: libloading::Library::new(transport_plugin).unwrap(),
+          handle: -1,
+	      lib: libloading::Library::new(transport_plugin).unwrap(),
        }
     }
 
     fn close(&self) -> i32 {
       trace!("close()");
       unsafe {
-           if let Ok(close_func) = self.lib.get::<libloading::Symbol<unsafe extern fn() -> i32>>(DT_CLOSE_FCN) {
-               close_func()
+           if let Ok(close_func) = self.lib.get::<libloading::Symbol<unsafe extern fn(i32) -> i32>>(DT_CLOSE_FCN) {
+               close_func(self.handle)
            } else {
                -1
            }
        }
     }
 
-    fn open(&self, config: &str) -> i32 {
+    fn open(&mut self, config: &str) -> i32 {
       trace!("open()");
       unsafe {
            if let Ok(open_func) =
                self.lib.get::<libloading::Symbol<unsafe extern fn(* const c_char) -> i32>>(DT_OPEN_FCN) {
-               open_func(CString::new(config).unwrap().as_ptr())
+               self.handle = open_func(CString::new(config).unwrap().as_ptr());
+               0
            } else {
                -1
            }
        }
     }
 
-    fn write(&self, data: &[u8]) ->i32 {
-       trace!("write({:?})", data);
+    fn write(&self, data: &[u8]) -> i32 {
+       trace!("write({:?})", from_utf8(data).unwrap());
        unsafe {
            if let Ok(write_func) =
-               self.lib.get::<libloading::Symbol<unsafe extern fn(&[u8]) -> i32>>(DT_WRITE_FCN) {
-               write_func(data)
+               self.lib.get::<libloading::Symbol<unsafe extern fn(i32, &[u8]) -> i32>>(DT_WRITE_FCN) {
+               write_func(self.handle, data)
+           } else {
+               -1
+           }
+       }
+    }
+
+    fn flush(&self) -> i32 {
+       trace!("flush() {}", self.handle);
+       unsafe {
+           if let Ok(flush_func) =
+               self.lib.get::<libloading::Symbol<unsafe extern fn(i32) -> i32>>(b"dt_transport_flush") {
+               flush_func(100) //self.handle)
            } else {
                -1
            }
@@ -117,6 +128,7 @@ impl TransportBridge {
 const DT_OPEN_FCN: &'static[u8] = b"dt_transport_open";
 const DT_CLOSE_FCN: &'static[u8] = b"dt_transport_close";
 const DT_WRITE_FCN: &'static[u8] = b"dt_transport_write";
+const DT_FLUSH_FCN: &'static[u8] = b"dt_transport_flush";
 
 // libdtrace constants;
 const EINTR: i32 = 9959;
@@ -157,10 +169,21 @@ fn dtrace_program_strcompile(handle: *mut self::libdtrace::dtrace_hdl_t,
     script: & str, spec: self::libdtrace::dtrace_probespec_t, cflags: u32)
     -> *mut self::libdtrace::dtrace_prog_t {
 
-    unsafe {
-        self::libdtrace::dtrace_program_strcompile(handle,
-            CString::new(script).unwrap().as_ptr(), spec,
-            cflags, 0, ::std::ptr::null())
+    if let sysctl::CtlValue::String(hostuuid) =
+        sysctl::value("kern.hostuuid").unwrap() {
+        let args = vec!(CString::new(format!("\"{}\"", hostuuid)).unwrap());
+        let c_args = args.iter().map(|arg| arg.as_ptr()).collect::<Vec<*const c_char>>();
+        unsafe {
+            self::libdtrace::dtrace_program_strcompile(handle,
+                CString::new(script).unwrap().as_ptr(), spec,
+                cflags, c_args.len() as ::std::os::raw::c_int, c_args.as_ptr())
+        }
+    } else {
+unsafe {
+            self::libdtrace::dtrace_program_strcompile(handle,
+                CString::new(script).unwrap().as_ptr(), spec,
+                cflags, 0, ::std::ptr::null())
+        }
     }
 }
     
@@ -213,6 +236,14 @@ fn dtrace_errno(handle: *mut self::libdtrace::dtrace_hdl_t) -> i32 {
     }
 }
 
+fn dtrace_handle_drop(handle: *mut self::libdtrace::dtrace_hdl_t,
+    hdlr: self::libdtrace::dtrace_handle_drop_f,
+    arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
+    unsafe {
+        self::libdtrace::dtrace_handle_drop(handle, hdlr, arg)
+    }
+}
+
 fn dtrace_handle_buffered(handle: *mut self::libdtrace::dtrace_hdl_t,
     hdlr: self::libdtrace::dtrace_handle_buffered_f,
     arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
@@ -226,7 +257,8 @@ fn dtrace_handle_buffered(handle: *mut self::libdtrace::dtrace_hdl_t,
 pub fn instrument_endpoint(script: String,
     rx: mpsc::Receiver<InstrumentationThreadMessage>) {
 
-    // Parse the configuration file specifying where the DTrace records are to be sent
+    // Parse the configuration file specifying where the DTrace records are to
+    // be sent
     unsafe {
         match toml::decode_str::<Config>(script.as_str()) {
             Some(config) => {
@@ -275,11 +307,18 @@ pub fn instrument_endpoint(script: String,
                 info!("dtrace instrumentation started...");
                
                 let mut handler = TransportBridge::new(
-                    "../transport/kafka/target/debug/libddtrace_kafka.so");
+                    "../transport/unix_socket/target/debug/libddtrace_unix_socket.so");
                    // "../transport/tcp/target/debug/libddtrace_tcp.so");
                 handler.open(script.as_str());
 
                 unsafe {
+                    if dtrace_handle_drop(handle, drop_handler,
+                       ::std::ptr::null_mut()) == -1 {
+                        error!("failed to register dtrace drop handler");
+                        dtrace_close(handle);
+                        return;
+                    }
+
                     let lib_ptr: *mut ::std::os::raw::c_void =
                         &mut handler as *mut _ as *mut ::std::os::raw::c_void;
                     if dtrace_handle_buffered(handle, buffered_handler, lib_ptr) == -1 {
@@ -295,8 +334,8 @@ pub fn instrument_endpoint(script: String,
                         }
 
                         trace!("dtrace work...");
-                        match dtrace_work(handle, ::std::ptr::null_mut(), chew, chewrec,
-                            handle as *mut ::std::os::raw::c_void) {
+                        match dtrace_work(handle, ::std::ptr::null_mut(), chew, chewrec, lib_ptr ){
+//                            handle as *mut ::std::os::raw::c_void) {
                             dtrace_workstatus_t::DTRACE_WORKSTATUS_ERROR => {
                                 if dtrace_errno(handle) != EINTR {
                                     error!("{}", dtrace_errmsg(handle, dtrace_errno(handle)));
@@ -348,6 +387,14 @@ pub fn instrument_endpoint(script: String,
     }
 }
 
+unsafe extern fn drop_handler(
+   data : *const self::libdtrace::dtrace_dropdata_t,
+   arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
+   
+   error!("{:?}", data);
+   0 // DTRACE_HANDLE_OK
+}
+
 unsafe extern fn buffered_handler(
    bufdata : *const self::libdtrace::dtrace_bufdata_t,
    arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
@@ -383,6 +430,11 @@ unsafe extern fn chewrec(_data: *const self::libdtrace::dtrace_probedata_t,
     if rec.is_null() {
         // Consume next record - DTRACE_CONSUME_NEXT
         trace!("consume next");
+       
+        // Flush the records upstream using the specified transport handler
+        let handler = arg as *const TransportBridge;
+        (* handler).flush();
+
         return DTRACE_CONSUME_NEXT;
     } else {
         let action = (* rec).dtrd_action;
@@ -390,6 +442,11 @@ unsafe extern fn chewrec(_data: *const self::libdtrace::dtrace_probedata_t,
         if action == 2 { 
             // Consume next record - DTRACE_CONSUME_NEXT
             trace!("chewrec() consume next");
+       
+            // Flush the records upstream using the specified transport handler
+            let handler = arg as *const TransportBridge;
+            (* handler).flush();
+
             return DTRACE_CONSUME_NEXT;
         } else {
             // Consume this record - DTRACE_CONSUME_THIS
