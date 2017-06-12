@@ -7,7 +7,7 @@ build = "build.rs"
 
 [dependencies]
 kafka = "0.3.2"
-zookeeper = { git = "https://github.com/bonifaido/rust-zookeeper" }
+zookeeper = "0.2" #{ git = "https://github.com/bonifaido/rust-zookeeper" }
 libc = "0.2.0"
 log = "0.3.6"
 time = "0.1.35" 

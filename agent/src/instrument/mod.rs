@@ -307,8 +307,8 @@ pub fn instrument_endpoint(script: String,
                 info!("dtrace instrumentation started...");
                
                 let mut handler = TransportBridge::new(
-                    "../transport/unix_socket/target/debug/libddtrace_unix_socket.so");
-                   // "../transport/tcp/target/debug/libddtrace_tcp.so");
+                    //"../transport/unix_socket/target/debug/libddtrace_unix_socket.so");
+                    "../transport/tcp/target/debug/libddtrace_tcp.so");
                 handler.open(script.as_str());
 
                 unsafe {

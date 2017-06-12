@@ -36,6 +36,7 @@ extern crate log;
 extern crate lazy_static;
 extern crate toml;
 extern crate rustc_serialize;
+extern crate rand;
 
 use std::io::prelude::*;
 use std::io::BufWriter;
@@ -46,6 +47,7 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::ffi::CStr;
+use rand::Rng;
 
 #[derive(Debug, RustcDecodable)]
 struct Config {
@@ -64,15 +66,15 @@ struct ServerConfig {
 }
 
 struct Context {
-    handle_map: Mutex<HashMap<i32, TcpStream>>,
-    //handle_map: Mutex<HashMap<i32, BufWriter<TcpStream>>>,
+    conn_id: i32,
+    handle_map: Mutex<HashMap<i32, BufWriter<TcpStream>>>,
 }
 
 impl Context {
     pub fn new() -> Context {
         Context {
             handle_map: Mutex::new(HashMap::new()),
-            // let handle_base = rng::thread_rng().gen::<i32>();
+            conn_id: rand::thread_rng().gen::<i32>(),
         }
     }
 }
@@ -115,17 +117,18 @@ pub fn dt_transport_open(config_raw: * const std::os::raw::c_char) -> i32
                     let port = server.port.unwrap();
                     let addr = SocketAddr::new(ip, port);
 
-                    //let stream = BufWriter::new(TcpStream::connect(addr).unwrap());
                     match TcpStream::connect(addr) {
                         Ok(tcp_stream) => {
                             info!("Opened new TCP connection to {}", addr);
+                            let buffer = BufWriter::new(tcp_stream);
 
                             // Generate a random handle for the tcp stream
                             let handle = 100;
                             // handle = CONTEXT.handle_base;
                             // CONTEXT.handle_base += 1;
-                            trace!("Storing new TCP handle connection handle {}", handle);
-                            CONTEXT.handle_map.lock().unwrap().insert(handle, tcp_stream);
+                            trace!("Storing new connection handle {}", handle);
+                            CONTEXT.handle_map.lock().unwrap().insert(
+                                handle, buffer);
                             Some(handle) 
                         },
                         Err(e) => {
@@ -147,44 +150,35 @@ pub fn dt_transport_open(config_raw: * const std::os::raw::c_char) -> i32
 }
 
 #[no_mangle]
-//pub fn dt_transport_close(handle: i32) -> i32
-pub fn dt_transport_close() -> i32
+pub fn dt_transport_close(handle: i32) -> i32
 {
-    // Remove the stream from the CONTEXT handle_map.
-    // This will close the underlying TCP connection.
-    let handle = 100;
-
     if let Some(stream) = CONTEXT.handle_map.lock().unwrap().remove(&handle) {
         // The stream is closed here
-        trace!("Closing TCP connection to {:?}", stream.peer_addr());
+        //trace!("Closing TCP connection to {:?}", stream.peer_addr());
         0
     } else {
-        error!("error closing TCP connection invalid handle");
+        error!("error closing TCP connection invalid handle {}", handle);
         -1
     }
 }
 
 #[no_mangle]
-//pub fn dt_transport_write(handle: i32, data: &[u8]) -> i32
-pub fn dt_transport_write(data: &[u8]) -> i32
+pub fn dt_transport_write(handle: i32, data: &[u8]) -> i32
 {
-    trace!("writing DTrace records {:?}", data);
-
-    let handle = 100;
-
-    if let Some(mut stream) = CONTEXT.handle_map.lock().unwrap().get(&handle) {
+    if let Some(mut stream) =
+        CONTEXT.handle_map.lock().unwrap().get_mut(&handle) {
         match stream.write(data) {
             Ok(_) => {
                 info!("OK");
                 0
             },
             Err(err) => {
-                error!("Error writting to {:?}: {:?}", stream.peer_addr(), err);
+                //error!("Error writting to {:?}: {:?}", stream.peer_addr(), err);
                 -1
             }
         }
     } else {
-        error!("handle not found");
+        error!("handle not found {}", handle);
         -1
     }
 }
@@ -192,20 +186,20 @@ pub fn dt_transport_write(data: &[u8]) -> i32
 #[no_mangle]
 pub fn dt_transport_flush(handle: i32) -> i32
 {
-    if let Some(mut stream) = CONTEXT.handle_map.lock().unwrap().get(&handle) {
+    if let Some(mut stream) =
+        CONTEXT.handle_map.lock().unwrap().get_mut(&handle) {
         match stream.flush() {
             Ok(_) => {
                 trace!("flushing DTrace records");
-                error!("OK");
                 0
             },
             Err(err) => {
-                trace!("Failed flushing DTrace records to {:?}: {:?}", stream.peer_addr(), err);
+                //trace!("Failed flushing DTrace records to {:?}: {:?}", stream.peer_addr(), err);
                 -1
             }
         }
     } else {
-        error!("handle not found");
+        error!("handle not found {}", handle);
         -1
     }
 }
@@ -213,21 +207,20 @@ pub fn dt_transport_flush(handle: i32) -> i32
 #[no_mangle]
 pub fn dt_transport_writeall(handle: i32, data: &[u8]) -> i32
 {
-    trace!("writing DTrace records {:?}", data);
-
-    if let Some(mut stream) = CONTEXT.handle_map.lock().unwrap().get(&handle) {
+    if let Some(mut stream) =
+        CONTEXT.handle_map.lock().unwrap().get_mut(&handle) {
         match stream.write_all(data) {
             Ok(_) => {
                 info!("OK");
                 0
             },
             Err(err) => {
-                error!("Error writting to {:?}: {:?}", stream.peer_addr(), err);
+                //error!("Error writting to {:?}: {:?}", stream.peer_addr(), err);
                 -1
             }
         }
     } else {
-        error!("handle not found");
+        error!("handle not found {}", handle);
         -1
     }
 }
