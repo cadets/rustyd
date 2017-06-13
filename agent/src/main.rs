@@ -272,15 +272,7 @@ fn main() {
    log4rs::init_file("config/log.toml", Default::default()).unwrap();
  
    info!("initializing...");
-   unsafe {
-       let lib = libloading::Library::new("../transport/unix_socket/target/debug/libddtrace_unix_socket.so").unwrap();
- if let Ok(flush_func) =
-               lib.get::<libloading::Symbol<unsafe extern fn(i32) -> i32>>(b"dt_transport_flush") {
-       error!("flush() ok");
-           } else {
-       error!("flush() error");
-           }
- }
+
    // Parse the command line arguments
    let args: Args = Docopt::new(USAGE)
       .and_then(|d| d.decode())

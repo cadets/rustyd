@@ -334,11 +334,14 @@ pub fn instrument_endpoint(script: String,
                         }
 
                         trace!("dtrace work...");
-                        match dtrace_work(handle, ::std::ptr::null_mut(), chew, chewrec, lib_ptr ){
+                        match dtrace_work(handle, ::std::ptr::null_mut(),
+                            chew, chewrec, lib_ptr ){
 //                            handle as *mut ::std::os::raw::c_void) {
                             dtrace_workstatus_t::DTRACE_WORKSTATUS_ERROR => {
                                 if dtrace_errno(handle) != EINTR {
-                                    error!("{}", dtrace_errmsg(handle, dtrace_errno(handle)));
+                                    error!("dtrace_work failed {}",
+                                           dtrace_errmsg(handle,
+                                           dtrace_errno(handle)));
                                     done = true;
                                 }
                             },
